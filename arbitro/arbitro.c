@@ -66,11 +66,11 @@ BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
 		*ritmo = val;
 	}
 
-	else { //se os pares nome/valor  não existirem no registo, mas o registo existe:
-		// Ler MAXLETRAS
-		if (RegQueryValueEx(hKey, TEXT("MAXLETRAS"), NULL, &dwType, (BYTE*)&val, &dwSize) != ERROR_SUCCESS) {
+	else { //registo existe:
+		// Ler MAXLETRAS 
+		if (RegQueryValueEx(hKey, TEXT("MAXLETRAS"), NULL, &dwType, (BYTE*)&val, &dwSize) != ERROR_SUCCESS) { //se não consegue ler é pq o par não existe
 			val = 6;
-			RegSetValueEx(hKey, TEXT("MAXLETRAS"), 0, REG_DWORD, (BYTE*)&val, sizeof(DWORD));
+			RegSetValueEx(hKey, TEXT("MAXLETRAS"), 0, REG_DWORD, (BYTE*)&val, sizeof(DWORD)); //então cria-o
 		}
 		*maxLetras = (val > 12) ? 12 : val;
 
@@ -81,9 +81,9 @@ BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
 
 		// Ler RITMO
 		dwSize = sizeof(DWORD);
-		if (RegQueryValueEx(hKey, TEXT("RITMO"), NULL, &dwType, (BYTE*)&val, &dwSize) != ERROR_SUCCESS) {
+		if (RegQueryValueEx(hKey, TEXT("RITMO"), NULL, &dwType, (BYTE*)&val, &dwSize) != ERROR_SUCCESS) { //se não consegue ler é pq o par não existe
 			val = 3;
-			RegSetValueEx(hKey, TEXT("RITMO"), 0, REG_DWORD, (BYTE*)&val, sizeof(DWORD));
+			RegSetValueEx(hKey, TEXT("RITMO"), 0, REG_DWORD, (BYTE*)&val, sizeof(DWORD)); //então cria-o
 		}
 		*ritmo = val;
 	}
@@ -210,6 +210,54 @@ DWORD WINAPI produce(LPVOID p) {
 	return 0;
 }
 
+void tratarComando(const char* comando) {
+	HKEY hKey;
+	DWORD size = sizeof(DWORD);
+	LONG result;
+	unsigned int val;
+
+	// Abrir chave
+	result = RegOpenKeyEx(HKEY_CURRENT_USER, TEXT("Software\\TrabSO2"), 0, KEY_READ | KEY_WRITE, &hKey);
+	if (result != ERROR_SUCCESS) {
+		printf("Erro ao abrir chave do registry (%ld)\n", result);
+		return;
+	}
+
+	// Ler valor atual de RITMO
+	result = RegQueryValueEx(hKey, TEXT("RITMO"), NULL, NULL, (LPBYTE)&val, &size);
+	if (result != ERROR_SUCCESS) {
+		_tprintf(_T("Erro ao ler RITMO, usando valor por omissão (3)\n"));
+		val = 3;
+	}
+	else {
+		_tprintf(_T("RITMO atual: %lu segundos\n"), val);
+	}
+	
+	if (_tcscmp(comando, _T("acelerar")) == 0) {
+		if (val > 1) {
+			val--;
+		}
+		else {
+			_tprintf(_T("RITMO já está no mínimo (1 segundo)\n"));
+			val = 1;
+		}
+		_tprintf(_T("RITMO acelerado para %lu segundos\n"), val);
+	}
+	else if (_tcscmp(comando, _T("travar")) == 0) {	
+		val++;
+		_tprintf(_T("RITMO travado para %lu segundos\n"), val);
+	}
+	
+	// Atualizar no registry
+	result = RegSetValueEx(hKey, TEXT("RITMO"), 0, REG_DWORD, (BYTE*)&val, size);
+	if (result != ERROR_SUCCESS) {
+		_tprintf(_T("Erro ao atualizar RITMO no registry\n"));
+	}
+	
+
+	RegCloseKey(hKey);
+}
+
 int _tmain(int argc, TCHAR* argv[])
 {
 	ControlData cdata;
@@ -249,7 +297,9 @@ int _tmain(int argc, TCHAR* argv[])
 	_tprintf(TEXT("Type in 'exit' to leave.\n"));
 
 	do {
-		_getts_s(command, 100);
+		_getts_s(command, 100); //falta sincronização
+		if(_tcscmp(command,_T("exit")) != 0)
+			tratarComando(command);
 	} while (_tcscmp(command, TEXT("exit")) != 0);
 
 
