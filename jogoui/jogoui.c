@@ -13,8 +13,9 @@
 #define BUFFER_SIZE 10
 
 typedef struct _BufferCell {
-	unsigned int id; //id 
-	unsigned  val; // valor 
+	unsigned int id; //id do produtor
+	wchar_t  letra; // valor que o produtor gerou
+	unsigned val;
 } BufferCell;
 
 typedef struct _SharedMem {
@@ -75,7 +76,7 @@ BOOL initMemAndSync(ControlData* cdata)
 
 	//inicializa
 	if (firstProcess) {
-	
+
 	}
 
 	//criar o mutex, uma vez que varios processos podem estar aceder ao mesmo espaço de memoria 
@@ -123,16 +124,16 @@ DWORD WINAPI consume(LPVOID p)
 
 		WaitForSingleObject(cdata->hReadSem, INFINITE); //estou a espera que possa ler os numeros mandados
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
-		
-		CopyMemory(0, 0, 0); //ler da memoria partilhada
-		
+
+		CopyMemory(&cell, &(cdata->sharedMem->buffer[(cdata->sharedMem->rP)++]), sizeof(BufferCell)); //recebo da memoria partilhada o nr
+
 		if (cdata->sharedMem->rP == BUFFER_SIZE)
 			cdata->sharedMem->rP = 0;//volta a ler do principio, caso chegue ao limite
-		
+
 		ReleaseMutex(cdata->hMutex);//fim zona critica
 		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);// liberto um produtor, porque ja leu oq estava escrito
-		
-		_tprintf(TEXT("C%d consumed %d from P%d\n"), cdata->id, cell.val, cell.id);
+
+		_tprintf(TEXT("C%d consumed %lc from P%d\n"), cdata->id, cell.letra, cell.id);
 		cdata->count++;//nr de itens
 		cdata->sum += cell.val;
 	}
