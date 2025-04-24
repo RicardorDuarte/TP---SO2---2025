@@ -12,10 +12,12 @@
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
 #define BUFFER_SIZE 10
+#define NUSERS 10
 
 typedef struct _BufferCell {
 	unsigned int id; //id do produtor
-	unsigned  val; // valor que o produtor gerou
+	wchar_t  letra; // valor que o produtor gerou
+	unsigned val;
 } BufferCell;
 
 typedef struct _SharedMem {
@@ -24,6 +26,8 @@ typedef struct _SharedMem {
 	unsigned int wP;  // posicao do buffer circular para a escrita     
 	unsigned int rP;  // posicao do buffer circular para a escrita  
 	BufferCell buffer[BUFFER_SIZE]; // buffer circular
+	char users[NUSERS];
+	int nusers;
 } SharedMem;
 
 typedef struct _ControlData {
@@ -57,7 +61,7 @@ BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
 		//quando crio a chave estes vao ser os valores default para cada par nome/valor:
 		// 6 e 3 são os valores default pedidos no enunciado
 
-		val = 6; 
+		val = 6;
 		RegSetValueEx(hKey, TEXT("MAXLETRAS"), 0, REG_DWORD, (BYTE*)&val, sizeof(DWORD));
 		*maxLetras = val;
 
@@ -90,7 +94,7 @@ BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
 
 	RegCloseKey(hKey);
 	return TRUE;
-} 
+}
 //concluido 18/4 ^
 
 
@@ -185,6 +189,7 @@ DWORD WINAPI produce(LPVOID p) {
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
 	cell.id = cdata->id; //id do produtor, incrementado no main
+	static wchar_t letras[] = L"abcdefghijlmnopqrstuvxz";
 
 	while (1) {
 		if (cdata->shutdown)
@@ -192,20 +197,25 @@ DWORD WINAPI produce(LPVOID p) {
 
 		WaitForSingleObject(cdata->hWriteSem, INFINITE);//verifico se posso escrever no array, ou seja se há vagas
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
+		unsigned indice = rand() % 23;
+		cell.letra = letras[indice];
 
-		CopyMemory(0,0,0); //escrever na memoria partilhada 
+		int pos = cdata->sharedMem->wP;
 
+		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
 		if (cdata->sharedMem->wP == BUFFER_SIZE)
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
+		
+		_tprintf(TEXT("Produtor %d gerou letra: %lc, memoria partilhada: %lc\n"), cell.id, cell.letra, 
+			cdata->sharedMem->buffer[pos].letra);
+
 
 		ReleaseMutex(cdata->hMutex);//fim zona critica
 		ReleaseSemaphore(cdata->hReadSem, 1, NULL);//liberto o semaforo de leitura, para avisar o consumidor que existem dados p ler
 
-		//_tprintf(TEXT("P%d produced %d\n"), cell.id, cell.val);
 
 		Sleep(1000);
-
-		cdata->count++;//nr de itens
+		cdata->count++;
 	}
 	return 0;
 }
@@ -232,7 +242,7 @@ void tratarComando(const char* comando) {
 	else {
 		_tprintf(_T("RITMO atual: %lu segundos\n"), val);
 	}
-	
+
 	if (_tcscmp(comando, _T("acelerar")) == 0) {
 		if (val > 1) {
 			val--;
@@ -243,17 +253,17 @@ void tratarComando(const char* comando) {
 		}
 		_tprintf(_T("RITMO acelerado para %lu segundos\n"), val);
 	}
-	else if (_tcscmp(comando, _T("travar")) == 0) {	
+	else if (_tcscmp(comando, _T("travar")) == 0) {
 		val++;
 		_tprintf(_T("RITMO travado para %lu segundos\n"), val);
 	}
-	
+
 	// Atualizar no registry
 	result = RegSetValueEx(hKey, TEXT("RITMO"), 0, REG_DWORD, (BYTE*)&val, size);
 	if (result != ERROR_SUCCESS) {
 		_tprintf(_T("Erro ao atualizar RITMO no registry\n"));
 	}
-	
+
 
 	RegCloseKey(hKey);
 }
@@ -268,7 +278,15 @@ int _tmain(int argc, TCHAR* argv[])
 	_setmode(_fileno(stdout), _O_WTEXT);
 	_setmode(_fileno(stderr), _O_WTEXT);
 #endif
-
+/*
+	if (argc < 2) {
+		_tprintf(TEXT("Erro: Nenhum username fornecido.\n"));
+	}
+	char *username = argv[1];
+	strncpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], NUSERS,username, _TRUNCATE);
+	cdata.sharedMem->users[cdata.sharedMem->nusers]= '\0'; // Garante terminação nula
+	cdata.sharedMem->nusers++;
+*/
 	cdata.shutdown = 0; //flag
 	cdata.count = 0; //numero de itens
 
@@ -281,7 +299,7 @@ int _tmain(int argc, TCHAR* argv[])
 	WaitForSingleObject(cdata.hMutex, INFINITE);
 
 	cdata.id = ++(cdata.sharedMem->p); // incrementa o contador partilhado com o numero de produtor
-	
+
 	ReleaseMutex(cdata.hMutex);
 
 	hThread = CreateThread(NULL, 0, produce, &cdata, 0, NULL);
@@ -298,7 +316,7 @@ int _tmain(int argc, TCHAR* argv[])
 
 	do {
 		_getts_s(command, 100); //falta sincronização
-		if(_tcscmp(command,_T("exit")) != 0)
+		if (_tcscmp(command, _T("exit")) != 0)
 			tratarComando(command);
 	} while (_tcscmp(command, TEXT("exit")) != 0);
 
