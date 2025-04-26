@@ -12,6 +12,7 @@
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define BUFFER_SIZE 10
 
+
 typedef struct _BufferCell {
 	unsigned int id; //id do produtor
 	wchar_t  letra; // valor que o produtor gerou
@@ -19,7 +20,6 @@ typedef struct _BufferCell {
 } BufferCell;
 
 typedef struct _SharedMem {
-	unsigned int p;   // contador partilhado com o numero de produtores  
 	unsigned int c;   // contador partilhado com o numero de consumidores   
 	unsigned int wP;  // posicao do buffer circular para a escrita     
 	unsigned int rP;  // posicao do buffer circular para a escrita  
@@ -69,7 +69,7 @@ BOOL initMemAndSync(ControlData* cdata)
 		sizeof(SharedMem)); //tamanho max
 
 	if (cdata->sharedMem == NULL) {
-		_tprintf(TEXT("Erro MapVieOf file %d"), GetLastError());
+		_tprintf(TEXT("Erro MapViewOf file %d"), GetLastError());
 		CloseHandle(cdata->hMapFile);
 		return FALSE;
 	}
@@ -119,9 +119,8 @@ DWORD WINAPI consume(LPVOID p)
 	cell.id = cdata->id; //id do consumidor, incrementado no main
 
 	while (1) {
-		if (cdata->shutdown)
+		if (cdata->shutdown == 1)	
 			return 0; //flag para terminar
-
 		WaitForSingleObject(cdata->hReadSem, INFINITE); //estou a espera que possa ler os numeros mandados
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
@@ -133,7 +132,7 @@ DWORD WINAPI consume(LPVOID p)
 		ReleaseMutex(cdata->hMutex);//fim zona critica
 		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);// liberto um produtor, porque ja leu oq estava escrito
 
-		_tprintf(TEXT("C%d consumed %lc from P%d\n"), cdata->id, cell.letra, cell.id);
+		_tprintf(TEXT("Letras Disponíveis: %lc\n"), cell.letra);
 		cdata->count++;//nr de itens
 		cdata->sum += cell.val;
 	}
@@ -176,10 +175,11 @@ int _tmain(int argc, TCHAR* argv[]) {
 		_getts_s(command, 100);
 	} while (_tcscmp(command, TEXT("exit")) != 0);
 
+	_tprintf(_T("1\n"));
 	cdata.shutdown = 1; //flag para terminar a thread
-
+	_tprintf(_T("2\n"));
 	WaitForSingleObject(hThread, INFINITE); //espera que a thread termine
-
+	_tprintf(_T("3\n"));
 
 
 	//fechar os handles para terminar
