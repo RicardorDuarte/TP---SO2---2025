@@ -13,15 +13,15 @@
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
 #define BUFFER_SIZE 10
 #define NUSERS 10
+#define PIPE_NAME _T("\\\\.\\pipe\\teste")
 
 typedef struct _BufferCell {
-	unsigned int id; //id do produtor
-	wchar_t  letra; // valor que o produtor gerou
+	unsigned int ttl; //tempo de vida da letra
+	TCHAR  letra; // valor que o produtor gerou
 	unsigned val;
 } BufferCell;
 
 typedef struct _SharedMem {
-	unsigned int p;   // contador partilhado com o numero de produtores  
 	unsigned int c;   // contador partilhado com o numero de consumidores   
 	unsigned int wP;  // posicao do buffer circular para a escrita     
 	unsigned int rP;  // posicao do buffer circular para a escrita  
@@ -32,13 +32,14 @@ typedef struct _SharedMem {
 
 typedef struct _ControlData {
 	unsigned int shutdown;  // flag "continua". 0 = continua, 1 = deve terminar
-	unsigned int id;        // id do processo  
-	unsigned int count;     // contador do numero de vezes  
+	unsigned int id;        // id do processo  (necessario para tp?)
+	unsigned int count;     // contador do numero de vezes (necessario para tp?)  
 	HANDLE hMapFile;        // ficheiro de memoria 
 	SharedMem* sharedMem;   // memoria partilhada
-	HANDLE hMutex;          // mutex - trabalho de casa -> acrescentar os outros 3 mutexes
+	HANDLE hMutex;          // mutex 
 	HANDLE hWriteSem;       // semaforo "aguarda por items escritos"
 	HANDLE hReadSem;        // semaforo "aguarda por posições vazias"
+	HANDLE hPipe[NUSERS]; // array de handles para os pipes de cada jogador
 } ControlData;
 
 
@@ -147,7 +148,6 @@ BOOL initMemAndSync(ControlData* cdata)
 
 	//inicializa
 	if (firstProcess) {
-		cdata->sharedMem->p = 0; //nr produtores
 		cdata->sharedMem->c = 0; //contador de consumidore
 		cdata->sharedMem->wP = 0; //posicao de 0 a buffersize para escrita
 		cdata->sharedMem->rP = 0; //posicao de 0 a buffersize para leitura
@@ -188,8 +188,7 @@ BOOL initMemAndSync(ControlData* cdata)
 DWORD WINAPI produce(LPVOID p) {
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
-	cell.id = cdata->id; //id do produtor, incrementado no main
-	static wchar_t letras[] = L"abcdefghijlmnopqrstuvxz";
+	static TCHAR letras[] = _T("abcdefghijklmnopqrstuvwxyz");
 
 	while (1) {
 		if (cdata->shutdown)
@@ -197,7 +196,7 @@ DWORD WINAPI produce(LPVOID p) {
 
 		WaitForSingleObject(cdata->hWriteSem, INFINITE);//verifico se posso escrever no array, ou seja se há vagas
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
-		unsigned indice = rand() % 23;
+		unsigned indice = rand() % 25;
 		cell.letra = letras[indice];
 
 		int pos = cdata->sharedMem->wP;
@@ -205,8 +204,8 @@ DWORD WINAPI produce(LPVOID p) {
 		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
 		if (cdata->sharedMem->wP == BUFFER_SIZE)
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
-		
-		_tprintf(TEXT("Produtor %d gerou letra: %lc, memoria partilhada: %lc\n"), cell.id, cell.letra, 
+
+		_tprintf(TEXT("Arbitro gerou letra: %lc, memoria partilhada: %lc\n"), cell.letra,
 			cdata->sharedMem->buffer[pos].letra);
 
 
@@ -214,17 +213,40 @@ DWORD WINAPI produce(LPVOID p) {
 		ReleaseSemaphore(cdata->hReadSem, 1, NULL);//liberto o semaforo de leitura, para avisar o consumidor que existem dados p ler
 
 
-		Sleep(1000);
+		// lançar as letras no ritmo certo:
+		LONG result;
+		HKEY hKey;
+		DWORD size = sizeof(DWORD);
+		unsigned int val;
+		result = RegOpenKeyEx(HKEY_CURRENT_USER, TEXT("Software\\TrabSO2"), 0, KEY_READ | KEY_WRITE, &hKey);
+		if (result != ERROR_SUCCESS) {
+			printf("Erro ao abrir chave do registry (%ld)\n", result);
+			return;
+		}
+
+		// Ler valor atual de RITMO
+		result = RegQueryValueEx(hKey, TEXT("RITMO"), NULL, NULL, (LPBYTE)&val, &size);
+		if (result != ERROR_SUCCESS) {
+			_tprintf(_T("Erro ao ler RITMO, usando valor por omissão (3)\n"));
+			val = 3;
+		}
+
+		Sleep(1000 * val); // espera o tempo definido no registry
 		cdata->count++;
 	}
 	return 0;
 }
 
-void tratarComando(const char* comando) {
+void tratarComando(const TCHAR* comando) {
 	HKEY hKey;
 	DWORD size = sizeof(DWORD);
 	LONG result;
 	unsigned int val;
+
+
+	if (_tcscmp(comando, _T("exit")) == 0) {
+		return;
+	}
 
 	// Abrir chave
 	result = RegOpenKeyEx(HKEY_CURRENT_USER, TEXT("Software\\TrabSO2"), 0, KEY_READ | KEY_WRITE, &hKey);
@@ -239,9 +261,7 @@ void tratarComando(const char* comando) {
 		_tprintf(_T("Erro ao ler RITMO, usando valor por omissão (3)\n"));
 		val = 3;
 	}
-	else {
-		_tprintf(_T("RITMO atual: %lu segundos\n"), val);
-	}
+	
 
 	if (_tcscmp(comando, _T("acelerar")) == 0) {
 		if (val > 1) {
@@ -264,31 +284,77 @@ void tratarComando(const char* comando) {
 		_tprintf(_T("Erro ao atualizar RITMO no registry\n"));
 	}
 
+	
+
 
 	RegCloseKey(hKey);
 }
+
+
+DWORD WINAPI comunica(LPVOID tdata) {
+	ControlData* cdata = (ControlData*)tdata;
+	//criar pipe para cada jogador
+	//ainda nao sei o que mandar pelo pipe, melhor coisa seria estruturas como em SO
+}
+
+
+void saidaordeira(ControlData* cdata, HANDLE hTread, HANDLE mutexGlobal) {
+	//função para saída ordeira
+	cdata->shutdown = 1; //altera a flag para que a thread termine
+	//fechar os pipes
+	_tprintf(_T("a tentar terminar\n"));
+	WaitForSingleObject(hTread, INFINITE);
+	for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+		CloseHandle(cdata->hPipe[i]);
+	}
+	//fechar os handles para terminar
+	CloseHandle(cdata->hMapFile);
+	CloseHandle(cdata->hMutex);
+	CloseHandle(cdata->hWriteSem);
+	CloseHandle(cdata->hReadSem);
+	//fechar o mutex de instancia unica
+	ReleaseMutex(mutexGlobal);
+	CloseHandle(mutexGlobal);
+}
+
 
 int _tmain(int argc, TCHAR* argv[])
 {
 	ControlData cdata;
 	HANDLE hThread;
 	TCHAR command[100];
+	
 #ifdef UNICODE
 	_setmode(_fileno(stdin), _O_WTEXT);
 	_setmode(_fileno(stdout), _O_WTEXT);
 	_setmode(_fileno(stderr), _O_WTEXT);
 #endif
-/*
-	if (argc < 2) {
-		_tprintf(TEXT("Erro: Nenhum username fornecido.\n"));
-	}
-	char *username = argv[1];
-	strncpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], NUSERS,username, _TRUNCATE);
-	cdata.sharedMem->users[cdata.sharedMem->nusers]= '\0'; // Garante terminação nula
-	cdata.sharedMem->nusers++;
-*/
+	/*
+		if (argc < 2) {
+			_tprintf(TEXT("Erro: Nenhum username fornecido.\n"));
+		}
+		char *username = argv[1];
+		strncpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], NUSERS,username, _TRUNCATE);
+		cdata.sharedMem->users[cdata.sharedMem->nusers]= '\0'; // Garante terminação nula
+		cdata.sharedMem->nusers++;
+	*/
 	cdata.shutdown = 0; //flag
 	cdata.count = 0; //numero de itens
+
+	//Como este mutex é global nem com outro user do windows seria possivel iniciar duas instâncias do arbitro
+	HANDLE hSingle_instance = CreateMutex(NULL, FALSE, TEXT("Global\\ARBITRO_UNICO"));
+	if (hSingle_instance == NULL) {
+		_tprintf(TEXT("Erro a criar mutex de instancia unica (%d)\n"), GetLastError());
+		return 1;
+	}
+
+	// Verificar se já existe um arbitro a correr
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		_tprintf(TEXT("Já existe uma instância do árbitro a correr.\n"));
+		CloseHandle(hSingle_instance);
+		return 1;
+	}
+
 
 	if (!initMemAndSync(&cdata))
 	{
@@ -297,8 +363,6 @@ int _tmain(int argc, TCHAR* argv[])
 	}
 
 	WaitForSingleObject(cdata.hMutex, INFINITE);
-
-	cdata.id = ++(cdata.sharedMem->p); // incrementa o contador partilhado com o numero de produtor
 
 	ReleaseMutex(cdata.hMutex);
 
@@ -323,16 +387,10 @@ int _tmain(int argc, TCHAR* argv[])
 
 	//função para saída ordeira
 
-
-	cdata.shutdown = 1; //altera a flag para que a thread termine
-	WaitForSingleObject(hThread, INFINITE);
-
-	CloseHandle(hThread);
-	UnmapViewOfFile(cdata.sharedMem);
-	CloseHandle(cdata.hMapFile);
-	CloseHandle(cdata.hMutex);
-	CloseHandle(cdata.hWriteSem);
-	CloseHandle(cdata.hReadSem);
+	saidaordeira(&cdata, hThread, hSingle_instance);
+	
+	_tprintf(_T("Saída ordeira bem sucedida\n"));
+	
 	return 0;
 
 }
