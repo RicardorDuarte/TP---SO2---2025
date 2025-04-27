@@ -39,9 +39,14 @@ typedef struct _ControlData {
 	HANDLE hMutex;          // mutex 
 	HANDLE hWriteSem;       // semaforo "aguarda por items escritos"
 	HANDLE hReadSem;        // semaforo "aguarda por posições vazias"
-	HANDLE hPipe[NUSERS]; // array de handles para os pipes de cada jogador
+	HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
+	unsigned int nPipes; // maximo de letras
 } ControlData;
 
+typedef struct _PipeData {
+	HANDLE hPipe;
+	TCHAR buff[256];
+} PipeData;
 
 
 BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
@@ -237,6 +242,14 @@ DWORD WINAPI produce(LPVOID p) {
 	return 0;
 }
 
+DWORD WINAPI PipesFunc(LPVOID lpParam) {
+	PipeData* info = (PipeData*)lpParam;
+	HANDLE prov = CreateNamedPipe(PIPE_NAME, PIPE_ACCESS_OUTBOUND, PIPE_WAIT | PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
+		10//alterar para MAXCLI
+		, sizeof(info.buff), sizeof(info.buff),
+		1000, NULL);
+}
+
 void tratarComando(const TCHAR* comando) {
 	HKEY hKey;
 	DWORD size = sizeof(DWORD);
@@ -261,7 +274,7 @@ void tratarComando(const TCHAR* comando) {
 		_tprintf(_T("Erro ao ler RITMO, usando valor por omissão (3)\n"));
 		val = 3;
 	}
-	
+
 
 	if (_tcscmp(comando, _T("acelerar")) == 0) {
 		if (val > 1) {
@@ -284,7 +297,7 @@ void tratarComando(const TCHAR* comando) {
 		_tprintf(_T("Erro ao atualizar RITMO no registry\n"));
 	}
 
-	
+
 
 
 	RegCloseKey(hKey);
@@ -323,23 +336,17 @@ int _tmain(int argc, TCHAR* argv[])
 	ControlData cdata;
 	HANDLE hThread;
 	TCHAR command[100];
-	
+	PipeData pidata;
+
 #ifdef UNICODE
 	_setmode(_fileno(stdin), _O_WTEXT);
 	_setmode(_fileno(stdout), _O_WTEXT);
 	_setmode(_fileno(stderr), _O_WTEXT);
 #endif
-	/*
-		if (argc < 2) {
-			_tprintf(TEXT("Erro: Nenhum username fornecido.\n"));
-		}
-		char *username = argv[1];
-		strncpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], NUSERS,username, _TRUNCATE);
-		cdata.sharedMem->users[cdata.sharedMem->nusers]= '\0'; // Garante terminação nula
-		cdata.sharedMem->nusers++;
-	*/
+	
 	cdata.shutdown = 0; //flag
 	cdata.count = 0; //numero de itens
+	cdata.nPipes = 0; //numero de pipes
 
 	//Como este mutex é global nem com outro user do windows seria possivel iniciar duas instâncias do arbitro
 	HANDLE hSingle_instance = CreateMutex(NULL, FALSE, TEXT("Global\\ARBITRO_UNICO"));
@@ -376,10 +383,19 @@ int _tmain(int argc, TCHAR* argv[])
 		CloseHandle(cdata.hReadSem);
 		return 1;
 	}
+	hThread = CreateThread(NULL, 0, PipesFunc, &cdata, 0, NULL);
+
+	
+	if (hThread == NULL) {
+		_tprintf(_T("[ERRO] Criar thread! Error: %d\n"), GetLastError());
+		return -1;
+	}
+
 	_tprintf(TEXT("Type in 'exit' to leave.\n"));
 
 	do {
 		_getts_s(command, 100); //falta sincronização
+		
 		if (_tcscmp(command, _T("exit")) != 0)
 			tratarComando(command);
 	} while (_tcscmp(command, TEXT("exit")) != 0);
@@ -388,9 +404,9 @@ int _tmain(int argc, TCHAR* argv[])
 	//função para saída ordeira
 
 	saidaordeira(&cdata, hThread, hSingle_instance);
-	
+
 	_tprintf(_T("Saída ordeira bem sucedida\n"));
-	
+
 	return 0;
 
 }
