@@ -119,8 +119,11 @@ DWORD WINAPI consume(LPVOID p)
 	cell.id = cdata->id; //id do consumidor, incrementado no main
 
 	while (1) {
-		if (cdata->shutdown == 1)	
+
+		if (cdata->shutdown == 1) {
+			_tprintf(TEXT("Consumidor %d a terminar\n"), cdata->id);
 			return 0; //flag para terminar
+		}
 		WaitForSingleObject(cdata->hReadSem, INFINITE); //estou a espera que possa ler os numeros mandados
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
@@ -147,6 +150,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 	ControlData cdata;
 	HANDLE hThread;
 	TCHAR command[100];
+	TCHAR* username;
 #ifdef UNICODE
 	_setmode(_fileno(stdin), _O_WTEXT);    // *** stdin  ***  
 	_setmode(_fileno(stdout), _O_WTEXT);   // *** stdout ***
@@ -156,7 +160,14 @@ int _tmain(int argc, TCHAR* argv[]) {
 	cdata.shutdown = 0;
 	cdata.count = 0;
 	cdata.sum = 0;
-
+/*/
+	if (argc < 2) {
+		_tprintf(TEXT("ERRO ARGS INVALIDOS\n"));
+		exit(1);
+	}
+	username = argv[1];
+	_tprintf(TEXT("Consumidor %s a iniciar...\n"), username);
+	*/
 	//inicializar
 	if (!initMemAndSync(&cdata)) {
 		_tprintf(TEXT("Error creating/opening shared memory and synchronization mechanisms.\n"));
@@ -173,13 +184,12 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 	do {
 		_getts_s(command, 100);
+
 	} while (_tcscmp(command, TEXT("exit")) != 0);
 
-	_tprintf(_T("1\n"));
+	ReleaseSemaphore(cdata.hReadSem, 1, NULL); //liberto o semaforo de leitura
 	cdata.shutdown = 1; //flag para terminar a thread
-	_tprintf(_T("2\n"));
 	WaitForSingleObject(hThread, INFINITE); //espera que a thread termine
-	_tprintf(_T("3\n"));
 
 
 	//fechar os handles para terminar
