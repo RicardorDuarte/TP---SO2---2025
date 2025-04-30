@@ -11,14 +11,12 @@
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
-#define BUFFER_SIZE 10
+#define BUFFER_SIZE 6
 #define NUSERS 10
 #define PIPE_NAME _T("\\\\.\\pipe\\teste")
 
 typedef struct _BufferCell {
-	unsigned int ttl; //tempo de vida da letra
 	TCHAR  letra; // valor que o produtor gerou
-	unsigned val;
 } BufferCell;
 
 typedef struct _SharedMem {
@@ -156,6 +154,10 @@ BOOL initMemAndSync(ControlData* cdata)
 		cdata->sharedMem->c = 0; //contador de consumidore
 		cdata->sharedMem->wP = 0; //posicao de 0 a buffersize para escrita
 		cdata->sharedMem->rP = 0; //posicao de 0 a buffersize para leitura
+
+		for (int i = 0; i < BUFFER_SIZE; i++) {
+			cdata->sharedMem->buffer[i].letra = _T('_'); // Correctly assign the 'letra' field of BufferCell
+		}
 	}
 
 	//criar o mutex, uma vez que varios processos podem estar aceder ao mesmo espaço de memoria 
@@ -186,6 +188,7 @@ BOOL initMemAndSync(ControlData* cdata)
 		return FALSE;
 	}
 
+
 	return TRUE;
 }
 
@@ -209,11 +212,13 @@ DWORD WINAPI produce(LPVOID p) {
 		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
 		if (cdata->sharedMem->wP == BUFFER_SIZE)
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
-
-		_tprintf(TEXT("Arbitro gerou letra: %lc, memoria partilhada: %lc\n"), cell.letra,
-			cdata->sharedMem->buffer[pos].letra);
-
-
+/*
+		_tprintf(TEXT("\nARRAY:\n"));
+		for (int i = 0; i < BUFFER_SIZE; i++) {
+			_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
+		}
+		_tprintf(TEXT("\n"));
+*/
 		ReleaseMutex(cdata->hMutex);//fim zona critica
 		ReleaseSemaphore(cdata->hReadSem, 1, NULL);//liberto o semaforo de leitura, para avisar o consumidor que existem dados p ler
 
@@ -236,8 +241,12 @@ DWORD WINAPI produce(LPVOID p) {
 			val = 3;
 		}
 
+	
+
 		Sleep(1000 * val); // espera o tempo definido no registry
 		cdata->count++;
+
+
 	}
 	return 0;
 }
@@ -246,7 +255,7 @@ DWORD WINAPI PipesFunc(LPVOID lpParam) {
 	PipeData* info = (PipeData*)lpParam;
 	HANDLE prov = CreateNamedPipe(PIPE_NAME, PIPE_ACCESS_OUTBOUND, PIPE_WAIT | PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
 		10//alterar para MAXCLI
-		, sizeof(info.buff), sizeof(info.buff),
+		, sizeof(info->buff), sizeof(info->buff),
 		1000, NULL);
 }
 
@@ -347,6 +356,8 @@ int _tmain(int argc, TCHAR* argv[])
 	cdata.shutdown = 0; //flag
 	cdata.count = 0; //numero de itens
 	cdata.nPipes = 0; //numero de pipes
+	
+
 
 	//Como este mutex é global nem com outro user do windows seria possivel iniciar duas instâncias do arbitro
 	HANDLE hSingle_instance = CreateMutex(NULL, FALSE, TEXT("Global\\ARBITRO_UNICO"));
@@ -368,6 +379,11 @@ int _tmain(int argc, TCHAR* argv[])
 		_tprintf(TEXT("Error creating/opening shared memory and synchronization mechanisms.\n"));
 		exit(1);
 	}
+
+	for (int i = 0; i < BUFFER_SIZE; i++) {
+		_tprintf(TEXT("%c\t"), cdata.sharedMem->buffer[i].letra);
+	}
+	_tprintf(TEXT("\n"));
 
 	WaitForSingleObject(cdata.hMutex, INFINITE);
 
