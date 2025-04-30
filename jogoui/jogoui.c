@@ -14,9 +14,7 @@
 
 
 typedef struct _BufferCell {
-	unsigned int id; //id do produtor
 	wchar_t  letra; // valor que o produtor gerou
-	unsigned val;
 } BufferCell;
 
 typedef struct _SharedMem {
@@ -116,7 +114,6 @@ DWORD WINAPI consume(LPVOID p)
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
 	int ranTime;
-	cell.id = cdata->id; //id do consumidor, incrementado no main
 
 	while (1) {
 
@@ -127,7 +124,16 @@ DWORD WINAPI consume(LPVOID p)
 		WaitForSingleObject(cdata->hReadSem, INFINITE); //estou a espera que possa ler os numeros mandados
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
-		CopyMemory(&cell, &(cdata->sharedMem->buffer[(cdata->sharedMem->rP)++]), sizeof(BufferCell)); //recebo da memoria partilhada o nr
+
+		_tprintf(TEXT("\nARRAY:\n"));
+		for (int i = 0; i < BUFFER_SIZE; i++) {
+			_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
+		}
+		_tprintf(TEXT("\n"));
+
+		//CopyMemory(&cell, &(cdata->sharedMem->buffer[(cdata->sharedMem->rP)++]), sizeof(BufferCell)); //recebo da memoria partilhada o nr
+		//qnd quisermos retirar da memória partilhada usar codigo a cima
+
 
 		if (cdata->sharedMem->rP == BUFFER_SIZE)
 			cdata->sharedMem->rP = 0;//volta a ler do principio, caso chegue ao limite
@@ -135,9 +141,7 @@ DWORD WINAPI consume(LPVOID p)
 		ReleaseMutex(cdata->hMutex);//fim zona critica
 		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);// liberto um produtor, porque ja leu oq estava escrito
 
-		_tprintf(TEXT("Letras Disponíveis: %lc\n"), cell.letra);
 		cdata->count++;//nr de itens
-		cdata->sum += cell.val;
 	}
 	return 0;
 }
@@ -160,15 +164,15 @@ int _tmain(int argc, TCHAR* argv[]) {
 	cdata.shutdown = 0;
 	cdata.count = 0;
 	cdata.sum = 0;
-/*/
-	if (argc < 2) {
-		_tprintf(TEXT("ERRO ARGS INVALIDOS\n"));
-		exit(1);
-	}
-	username = argv[1];
-	_tprintf(TEXT("Consumidor %s a iniciar...\n"), username);
-	*/
-	//inicializar
+	/*/
+		if (argc < 2) {
+			_tprintf(TEXT("ERRO ARGS INVALIDOS\n"));
+			exit(1);
+		}
+		username = argv[1];
+		_tprintf(TEXT("Consumidor %s a iniciar...\n"), username);
+		*/
+		//inicializar
 	if (!initMemAndSync(&cdata)) {
 		_tprintf(TEXT("Error creating/opening shared memory and synchronization mechanisms.\n"));
 		exit(1);
