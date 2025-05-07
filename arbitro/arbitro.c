@@ -13,7 +13,6 @@
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
 #define BUFFER_SIZE 6
 #define NUSERS 10
-#define PIPE_NAME _T("\\\\.\\pipe\\teste")
 
 typedef struct _BufferCell {
 	TCHAR  letra; // valor que o produtor gerou
@@ -156,7 +155,7 @@ BOOL initMemAndSync(ControlData* cdata)
 		cdata->sharedMem->rP = 0; //posicao de 0 a buffersize para leitura
 
 		for (int i = 0; i < BUFFER_SIZE; i++) {
-			cdata->sharedMem->buffer[i].letra = _T('_'); // Correctly assign the 'letra' field of BufferCell
+			cdata->sharedMem->buffer[i].letra = _T('_'); // inserir '_' em espaços em branco
 		}
 	}
 
@@ -193,7 +192,7 @@ BOOL initMemAndSync(ControlData* cdata)
 }
 
 //função thread que vai estar a produzir
-DWORD WINAPI produce(LPVOID p) {
+DWORD WINAPI enviaLetras(LPVOID p) {
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
 	static TCHAR letras[] = _T("abcdefghijklmnopqrstuvwxyz");
@@ -202,25 +201,18 @@ DWORD WINAPI produce(LPVOID p) {
 		if (cdata->shutdown)
 			return 0; //flag para terminar
 
-		WaitForSingleObject(cdata->hWriteSem, INFINITE);//verifico se posso escrever no array, ou seja se há vagas
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 		unsigned indice = rand() % 25;
 		cell.letra = letras[indice];
 
 		int pos = cdata->sharedMem->wP;
 
+
 		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
 		if (cdata->sharedMem->wP == BUFFER_SIZE)
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
-		/*
-				_tprintf(TEXT("\nARRAY:\n"));
-				for (int i = 0; i < BUFFER_SIZE; i++) {
-					_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
-				}
-				_tprintf(TEXT("\n"));
-		*/
+		
 		ReleaseMutex(cdata->hMutex);//fim zona critica
-		ReleaseSemaphore(cdata->hReadSem, 1, NULL);//liberto o semaforo de leitura, para avisar os clientes que existem dados p ler
 
 
 		// lançar as letras no ritmo certo:
@@ -252,12 +244,10 @@ DWORD WINAPI produce(LPVOID p) {
 
 DWORD WINAPI PipesFunc(LPVOID lpParam) {
 	PipeData* info = (PipeData*)lpParam;
-	HANDLE prov = CreateNamedPipe(PIPE_NAME, PIPE_ACCESS_OUTBOUND, PIPE_WAIT | PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
-		10//alterar para MAXCLI
-		, sizeof(info->buff), sizeof(info->buff),
-		1000, NULL);
+	
 	return 0;
 }
+
 
 void tratarComando(const TCHAR* comando) {
 	HKEY hKey;
@@ -354,10 +344,31 @@ DWORD WINAPI keyboardThread(LPVOID p) {
 	return 0;
 }
 
+void PrintLastError(TCHAR* part, DWORD id) {
+	LPTSTR buffer;  // auto alocado
+	if (part == NULL)
+		part = TEXT("*");
+	if (id == 0)
+		id = GetLastError();
+	FormatMessage(
+		FORMAT_MESSAGE_ALLOCATE_BUFFER |
+		FORMAT_MESSAGE_FROM_SYSTEM |
+		FORMAT_MESSAGE_IGNORE_INSERTS,
+		NULL,
+		id,
+		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		(LPTSTR)&buffer,
+		64,
+		NULL);
+	_tprintf(TEXT("\n%s Erro %d: %s\n"), part, id, buffer);
+	LocalFree(buffer);
+}
+
 
 
 int _tmain(int argc, TCHAR* argv[])
 {
+	LPTSTR teste1 = _T("\\\\.\\pipe\\xpto");
 	ControlData cdata;
 	HANDLE hThread,hThrTeclado,hPipe;
 	TCHAR command[100];
@@ -421,13 +432,21 @@ int _tmain(int argc, TCHAR* argv[])
 	}
 	
 	do {
+		BOOL fConnected = FALSE;
 		unsigned int i = 0;
-		hPipe = CreateNamedPipe(PIPE_NAME,
-			PIPE_ACCESS_OUTBOUND,
-			PIPE_WAIT | PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
-			NUSERS, sizeof(pidata.buff), sizeof(pidata.buff), 1000,NULL);
+		hPipe = CreateNamedPipe(
+			teste1,             // nome do pipe 
+			PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,       // acesso read/write 
+			PIPE_TYPE_MESSAGE |       // tipo de pipe = message
+			PIPE_READMODE_MESSAGE |   // com modo message-read e
+			PIPE_WAIT,                // bloqueante 
+			PIPE_UNLIMITED_INSTANCES, // max. instancias (255)
+			sizeof(TCHAR),                  // tam buffer output
+			sizeof(TCHAR),                  // tam buffer input 
+			50000,                     // time-out p/ cliente 5k milisegundos (0->default=50)
+			NULL);                    // atributos seguran�a default
 
-		if (hPipe == NULL) {
+		if (hPipe == INVALID_HANDLE_VALUE) {
 			_tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
 			saidaordeira(&cdata, hThread, hSingle_instance);
 			return -1;
@@ -435,33 +454,41 @@ int _tmain(int argc, TCHAR* argv[])
 
 		_tprintf(_T("À espera de conexão de um user. . .\n"));
 
-		if (!(ConnectNamedPipe(hPipe, NULL))) {
-			_tprintf(_T("[ERRO] ligação a cliente! Error: %d\n"), GetLastError());
-			saidaordeira(&cdata, hThread, hSingle_instance);
-			return -1;
-		}
+		fConnected = ConnectNamedPipe(hPipe, NULL) ?
+			TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
 
-		_tprintf(_T("Ligação a leitor bem sucedida!\n"));
-		
-		WaitForSingleObject(cdata.hMutex, INFINITE);
-		//adicionar o pipe à lista de pipes
-		cdata.hPipe[cdata.nPipes] = hPipe;
-		cdata.count++;
-		ReleaseMutex(cdata.hMutex);
-	} while (!(cdata.shutdown));
+		if (hPipe == INVALID_HANDLE_VALUE) {
+			PrintLastError(TEXT("\nCreateNamedPipe falhou, erro = %d"), GetLastError());
+		}
 	
 
+		if (fConnected) {
+			_tprintf(TEXT("\nCliente ligado"));
 
-	hThread = CreateThread(NULL, 0, produce, &cdata, 0, NULL);
+			_tprintf(_T("Ligação a leitor bem sucedida!\n"));
 
-	if (hThread == NULL) {
-		_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
-		saidaordeira(&cdata, hThread, hSingle_instance);
-		return 1;
-	}
+			WaitForSingleObject(cdata.hMutex, INFINITE);
+			//adicionar o pipe à lista de pipes
+			cdata.hPipe[cdata.nPipes] = hPipe;
+			cdata.count++;
+			ReleaseMutex(cdata.hMutex);
+		}
+
+		
+
+		hThread = CreateThread(NULL, 0, enviaLetras, &cdata, 0, NULL);
+
+		if (hThread == NULL) {
+			_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
+			saidaordeira(&cdata, hThread, hSingle_instance);
+			return 1;
+		}
 
 
 
+
+		
+	} while (!(cdata.shutdown));
 
 	WaitForSingleObject(hThrTeclado, INFINITE);
 	saidaordeira(&cdata, hThread, hSingle_instance);
@@ -469,5 +496,4 @@ int _tmain(int argc, TCHAR* argv[])
 	_tprintf(_T("Saída ordeira bem sucedida\n"));
 
 	return 0;
-
 }
