@@ -212,15 +212,15 @@ DWORD WINAPI produce(LPVOID p) {
 		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
 		if (cdata->sharedMem->wP == BUFFER_SIZE)
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
-/*
-		_tprintf(TEXT("\nARRAY:\n"));
-		for (int i = 0; i < BUFFER_SIZE; i++) {
-			_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
-		}
-		_tprintf(TEXT("\n"));
-*/
+		/*
+				_tprintf(TEXT("\nARRAY:\n"));
+				for (int i = 0; i < BUFFER_SIZE; i++) {
+					_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
+				}
+				_tprintf(TEXT("\n"));
+		*/
 		ReleaseMutex(cdata->hMutex);//fim zona critica
-		ReleaseSemaphore(cdata->hReadSem, 1, NULL);//liberto o semaforo de leitura, para avisar o consumidor que existem dados p ler
+		ReleaseSemaphore(cdata->hReadSem, 1, NULL);//liberto o semaforo de leitura, para avisar os clientes que existem dados p ler
 
 
 		// lançar as letras no ritmo certo:
@@ -231,7 +231,7 @@ DWORD WINAPI produce(LPVOID p) {
 		result = RegOpenKeyEx(HKEY_CURRENT_USER, TEXT("Software\\TrabSO2"), 0, KEY_READ | KEY_WRITE, &hKey);
 		if (result != ERROR_SUCCESS) {
 			printf("Erro ao abrir chave do registry (%ld)\n", result);
-			return;
+			return -1;
 		}
 
 		// Ler valor atual de RITMO
@@ -241,11 +241,10 @@ DWORD WINAPI produce(LPVOID p) {
 			val = 3;
 		}
 
-	
+
 
 		Sleep(1000 * val); // espera o tempo definido no registry
 		cdata->count++;
-
 
 	}
 	return 0;
@@ -257,6 +256,7 @@ DWORD WINAPI PipesFunc(LPVOID lpParam) {
 		10//alterar para MAXCLI
 		, sizeof(info->buff), sizeof(info->buff),
 		1000, NULL);
+	return 0;
 }
 
 void tratarComando(const TCHAR* comando) {
@@ -317,6 +317,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 	ControlData* cdata = (ControlData*)tdata;
 	//criar pipe para cada jogador
 	//ainda nao sei o que mandar pelo pipe, melhor coisa seria estruturas como em SO
+	return 0;
 }
 
 
@@ -340,10 +341,25 @@ void saidaordeira(ControlData* cdata, HANDLE hTread, HANDLE mutexGlobal) {
 }
 
 
+DWORD WINAPI keyboardThread(LPVOID p) {
+	TCHAR command[100];
+
+	do {
+		_getts_s(command, 100);
+		if (_tcscmp(command, _T("exit")) != 0) {
+			tratarComando(command);
+		}
+	} while (_tcscmp(command, _T("exit")) != 0);
+
+	return 0;
+}
+
+
+
 int _tmain(int argc, TCHAR* argv[])
 {
 	ControlData cdata;
-	HANDLE hThread;
+	HANDLE hThread,hThrTeclado,hPipe;
 	TCHAR command[100];
 	PipeData pidata;
 
@@ -352,11 +368,11 @@ int _tmain(int argc, TCHAR* argv[])
 	_setmode(_fileno(stdout), _O_WTEXT);
 	_setmode(_fileno(stderr), _O_WTEXT);
 #endif
-	
+
 	cdata.shutdown = 0; //flag
 	cdata.count = 0; //numero de itens
 	cdata.nPipes = 0; //numero de pipes
-	
+
 
 
 	//Como este mutex é global nem com outro user do windows seria possivel iniciar duas instâncias do arbitro
@@ -380,45 +396,74 @@ int _tmain(int argc, TCHAR* argv[])
 		exit(1);
 	}
 
+	// Imprime o a memória partilhada inicial, que deve ser apenas " _ "
 	for (int i = 0; i < BUFFER_SIZE; i++) {
 		_tprintf(TEXT("%c\t"), cdata.sharedMem->buffer[i].letra);
 	}
 	_tprintf(TEXT("\n"));
 
-	WaitForSingleObject(cdata.hMutex, INFINITE);
-
-	ReleaseMutex(cdata.hMutex);
-
-	hThread = CreateThread(NULL, 0, produce, &cdata, 0, NULL);
-
-	if (hThread == NULL) {
-		_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
-		CloseHandle(cdata.hMapFile);
-		CloseHandle(cdata.hMutex);
-		CloseHandle(cdata.hWriteSem);
-		CloseHandle(cdata.hReadSem);
-		return 1;
-	}
+	
 	hThread = CreateThread(NULL, 0, PipesFunc, &cdata, 0, NULL);
 
-	
 	if (hThread == NULL) {
 		_tprintf(_T("[ERRO] Criar thread! Error: %d\n"), GetLastError());
+		saidaordeira(&cdata, hThread, hSingle_instance);
 		return -1;
 	}
 
 	_tprintf(TEXT("Type in 'exit' to leave.\n"));
 
+	hThrTeclado = CreateThread(NULL, 0, keyboardThread, &cdata, 0, NULL);
+	if (hThrTeclado == NULL) {
+		_tprintf(TEXT("Error creating keyboard thread (%d)\n"), GetLastError());
+		saidaordeira(&cdata, hThread, hSingle_instance);
+		return 1;
+	}
+	
 	do {
-		_getts_s(command, 100); //falta sincronização
+		unsigned int i = 0;
+		hPipe = CreateNamedPipe(PIPE_NAME,
+			PIPE_ACCESS_OUTBOUND,
+			PIPE_WAIT | PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
+			NUSERS, sizeof(pidata.buff), sizeof(pidata.buff), 1000,NULL);
+
+		if (hPipe == NULL) {
+			_tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
+			saidaordeira(&cdata, hThread, hSingle_instance);
+			return -1;
+		}
+
+		_tprintf(_T("À espera de conexão de um user. . .\n"));
+
+		if (!(ConnectNamedPipe(hPipe, NULL))) {
+			_tprintf(_T("[ERRO] ligação a cliente! Error: %d\n"), GetLastError());
+			saidaordeira(&cdata, hThread, hSingle_instance);
+			return -1;
+		}
+
+		_tprintf(_T("Ligação a leitor bem sucedida!\n"));
 		
-		if (_tcscmp(command, _T("exit")) != 0)
-			tratarComando(command);
-	} while (_tcscmp(command, TEXT("exit")) != 0);
+		WaitForSingleObject(cdata.hMutex, INFINITE);
+		//adicionar o pipe à lista de pipes
+		cdata.hPipe[cdata.nPipes] = hPipe;
+		cdata.count++;
+		ReleaseMutex(cdata.hMutex);
+	} while (!(cdata.shutdown));
+	
 
 
-	//função para saída ordeira
+	hThread = CreateThread(NULL, 0, produce, &cdata, 0, NULL);
 
+	if (hThread == NULL) {
+		_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
+		saidaordeira(&cdata, hThread, hSingle_instance);
+		return 1;
+	}
+
+
+
+
+	WaitForSingleObject(hThrTeclado, INFINITE);
 	saidaordeira(&cdata, hThread, hSingle_instance);
 
 	_tprintf(_T("Saída ordeira bem sucedida\n"));
