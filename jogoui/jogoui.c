@@ -11,7 +11,6 @@
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define BUFFER_SIZE 10
-#define PIPE_NAME _T("\\\\.\\pipe\\teste")
 
 
 
@@ -111,7 +110,6 @@ DWORD WINAPI consume(LPVOID p)
 			_tprintf(TEXT("vou fechar!\n"));
 			return 0; 
 		}
-		WaitForSingleObject(cdata->hReadSem, INFINITE); //espero para ler
 		
 
 		_tprintf(TEXT("\nARRAY:\n"));
@@ -133,11 +131,10 @@ DWORD WINAPI consume(LPVOID p)
 		}
 
 		
-		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);// liberto um produtor, porque ja leu oq estava escrito
 		WaitForSingleObject(cdata->hMutex, INFINITE);
 		cdata->count++;//nr de itens
 		ReleaseMutex(cdata->hMutex);//fim zona critica
-
+		Sleep(3000);
 	}
 	return 0;
 }
@@ -151,6 +148,8 @@ int _tmain(int argc, TCHAR* argv[]) {
 	HANDLE hThread, hPipe;
 	TCHAR command[100], buf[256];
 	TCHAR* username;
+	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
+
 #ifdef UNICODE
 	_setmode(_fileno(stdin), _O_WTEXT);    // *** stdin  ***  
 	_setmode(_fileno(stdout), _O_WTEXT);   // *** stdout ***
@@ -174,11 +173,12 @@ int _tmain(int argc, TCHAR* argv[]) {
 		exit(-1);
 	}
 	hPipe = CreateFile(PIPE_NAME,
-		GENERIC_READ | GENERIC_WRITE,
-		0, 
+		GENERIC_READ | 
+		GENERIC_WRITE,
+		0 | FILE_SHARE_READ | FILE_SHARE_WRITE, 
 		NULL, // default security attributes
 		OPEN_EXISTING, // opens existing pipe
-		0, // default attributes
+		0 | FILE_FLAG_OVERLAPPED, // default attributes
 		NULL); // no template file
 	
 	if (hPipe == NULL) {
