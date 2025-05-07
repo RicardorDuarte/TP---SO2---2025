@@ -7,50 +7,48 @@
 #include <io.h>
 
 #define SHM_NAME TEXT("SHM_PC")           // nome da memoria partilhada
-#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex   -> em casa devem pensar numa solução para ter mutex´s distintos de forma a não existir perda de performance 
+#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex    
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define BUFFER_SIZE 10
+#define PIPE_NAME _T("\\\\.\\pipe\\teste")
+
 
 
 typedef struct _BufferCell {
-	wchar_t  letra; // valor que o produtor gerou
+	TCHAR  letra; // 
 } BufferCell;
 
 typedef struct _SharedMem {
 	unsigned int c;   // contador partilhado com o numero de consumidores   
-	unsigned int wP;  // posicao do buffer circular para a escrita     
-	unsigned int rP;  // posicao do buffer circular para a escrita  
-	BufferCell buffer[BUFFER_SIZE]; // buffer circular
+	unsigned int wP;  // posicao do buffer para escrita     
+	unsigned int rP;  // posicao do buffer para escrita  
+	BufferCell buffer[BUFFER_SIZE]; // buffer
 } SharedMem;
 
 typedef struct _ControlData {
-	unsigned int shutdown;  // flag "continua". 0 = continua, 1 = deve terminar
+	unsigned int shutdown;  //  0 = continua, 1 = terminar
 	unsigned int id;        // id do processo  
-	unsigned int count;     // contador do numero de vezes  
-	unsigned int sum;       // somatorio de todos os proc consumidores 
+	unsigned int count;     // contador do numero de users  
 	HANDLE hMapFile;        // ficheiro de memoria 
 	SharedMem* sharedMem;   // memoria partilhada
-	HANDLE hMutex;          // mutex - trabalho de casa -> acrescentar os outros 2 mutexes
-	HANDLE hWriteSem;       // sem�foro "aguarda por items escritos"
-	HANDLE hReadSem;        // sem�foro "aguarda por posições vazias"
+	HANDLE hMutex;          // mutex
+	HANDLE hWriteSem;       // semaforo 
+	HANDLE hReadSem;        // semaforo 
 } ControlData;
 
 BOOL initMemAndSync(ControlData* cdata)
 {
-	//Creates or opens a named or unnamed file mapping object for a specified file.
-	//Criar ou abrir um ficheiro para mapear em memoria
 	BOOL firstProcess = FALSE;
-	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//SE CORRER BEM É PORQUE JÁ EXISTE, SE FOR NULL CRIA EM BAIXO
-	if (cdata->hMapFile == NULL) {//se for null cria o
+	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//se correr bem ja existe, se não, cria depois
+	if (cdata->hMapFile == NULL) {//se for null cria
 		cdata->hMapFile = CreateFileMapping(
-			INVALID_HANDLE_VALUE, //como aqui nao ha ficheiro para interligar, nao colocamos nada
-			NULL, // ATRIBUTO DE SEGURANCA DEFAULT
-			PAGE_READWRITE,//PERMISSOES DE VISTAS
+			INVALID_HANDLE_VALUE, //nao ha ficheiro para interligar, nao colocamos nada
+			NULL, // atributo seguranca default
+			PAGE_READWRITE,//permissoes
 			0,//tamanho inicial
-			sizeof(SharedMem), //sizeof(SharedMsg) AQUI É O TAMANHO
-			SHM_NAME); //este nome é muito importante para saber qual o hMapFile a usar/chamar noutros processos
-		firstProcess = TRUE;//se foi criada é o primeiro processo
+			sizeof(SharedMem), // tamanho
+			SHM_NAME); 
 	}
 	if (cdata->hMapFile == NULL)
 	{
@@ -58,11 +56,10 @@ BOOL initMemAndSync(ControlData* cdata)
 		return FALSE;
 	}
 
-	//Maps a view of a file mapping into the address space of a calling process
-	//isto serve para colocar a mensagem escrita em memoria partilhada, para podermos aceder noutros processos
-	cdata->sharedMem = (SharedMem*)MapViewOfFile(cdata->hMapFile,//aquilo que pretendemos mapear
-		FILE_MAP_ALL_ACCESS, //permissoes de acesso, tipo de acesso
-		0,//USAR 0 SE O FICHEIRO FOR MENOR QUE DGB
+	
+	cdata->sharedMem = (SharedMem*)MapViewOfFile(cdata->hMapFile,//mapeia a memoria
+		FILE_MAP_ALL_ACCESS, //permissoes / tipo de acesso
+		0,//0 if < 4GB
 		0,//de onde começamos a mapear
 		sizeof(SharedMem)); //tamanho max
 
@@ -72,15 +69,9 @@ BOOL initMemAndSync(ControlData* cdata)
 		return FALSE;
 	}
 
-	//inicializa
-	if (firstProcess) {
-
-	}
-
-	//criar o mutex, uma vez que varios processos podem estar aceder ao mesmo espaço de memoria 
-	cdata->hMutex = CreateMutex(NULL,//atributos de segurança
+	cdata->hMutex = CreateMutex(NULL,//seg
 		FALSE,
-		MUTEX_NAME); // nome do mutex para permitir a partilha entre processos diferentes
+		MUTEX_NAME);
 
 	if (cdata->hMutex == NULL) {
 		_tprintf(TEXT("ERRO: %d"), GetLastError());
@@ -90,10 +81,9 @@ BOOL initMemAndSync(ControlData* cdata)
 	}
 
 	//semaforo para escrita
-	cdata->hWriteSem = CreateSemaphore(NULL, BUFFER_SIZE, BUFFER_SIZE, SEM_WRITE_NAME);//cria o semaforo e deixa escrever ate ao maximo logo à cabeca
-
-	if (cdata->hWriteSem != NULL) {//eu acho que faz sentido ser assim, so cria o de leitura se o de escrita tiver sido criado
-		cdata->hReadSem = CreateSemaphore(NULL, 0, BUFFER_SIZE, SEM_READ_NAME);//aquele zero é oq ele deixa passar no inicio, que é nada porque não há nada escrito
+	cdata->hWriteSem = CreateSemaphore(NULL, BUFFER_SIZE, BUFFER_SIZE, SEM_WRITE_NAME);
+	if (cdata->hWriteSem != NULL) {
+		cdata->hReadSem = CreateSemaphore(NULL, 0, BUFFER_SIZE, SEM_READ_NAME);
 	}
 
 	if (cdata->hReadSem == NULL) {
@@ -108,9 +98,9 @@ BOOL initMemAndSync(ControlData* cdata)
 	return TRUE;
 }
 
-//thread que vai estar a consultar o buffer circular
+
 DWORD WINAPI consume(LPVOID p)
-{//ACHO QUE TA FEITO
+{
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
 	int ranTime;
@@ -118,30 +108,36 @@ DWORD WINAPI consume(LPVOID p)
 	while (1) {
 
 		if (cdata->shutdown == 1) {
-			_tprintf(TEXT("Consumidor %d a terminar\n"), cdata->id);
-			return 0; //flag para terminar
+			_tprintf(TEXT("vou fechar!\n"));
+			return 0; 
 		}
-		WaitForSingleObject(cdata->hReadSem, INFINITE); //estou a espera que possa ler os numeros mandados
-		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
-
+		WaitForSingleObject(cdata->hReadSem, INFINITE); //espero para ler
+		
 
 		_tprintf(TEXT("\nARRAY:\n"));
 		for (int i = 0; i < BUFFER_SIZE; i++) {
+			WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria
 			_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
+			ReleaseMutex(cdata->hMutex);//fim zona critica
+
 		}
 		_tprintf(TEXT("\n"));
 
 		//CopyMemory(&cell, &(cdata->sharedMem->buffer[(cdata->sharedMem->rP)++]), sizeof(BufferCell)); //recebo da memoria partilhada o nr
 		//qnd quisermos retirar da memória partilhada usar codigo a cima
 
-
-		if (cdata->sharedMem->rP == BUFFER_SIZE)
+		if (cdata->sharedMem->rP == BUFFER_SIZE) {
+			WaitForSingleObject(cdata->hMutex, INFINITE);
 			cdata->sharedMem->rP = 0;//volta a ler do principio, caso chegue ao limite
+			ReleaseMutex(cdata->hMutex);//fim zona critica
+		}
 
-		ReleaseMutex(cdata->hMutex);//fim zona critica
+		
 		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);// liberto um produtor, porque ja leu oq estava escrito
-
+		WaitForSingleObject(cdata->hMutex, INFINITE);
 		cdata->count++;//nr de itens
+		ReleaseMutex(cdata->hMutex);//fim zona critica
+
 	}
 	return 0;
 }
@@ -152,8 +148,8 @@ int _tmain(int argc, TCHAR* argv[]) {
 	//DIZ QUE CONSUMIU X ITENS MAIS NADA
 	//O CONSUMIDOR E O PRODUTOR TEM Q ESTAR EM PROJETOS DIFERENTES !!!!!, PARA COMPILAR
 	ControlData cdata;
-	HANDLE hThread;
-	TCHAR command[100];
+	HANDLE hThread, hPipe;
+	TCHAR command[100], buf[256];
 	TCHAR* username;
 #ifdef UNICODE
 	_setmode(_fileno(stdin), _O_WTEXT);    // *** stdin  ***  
@@ -163,7 +159,6 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 	cdata.shutdown = 0;
 	cdata.count = 0;
-	cdata.sum = 0;
 	/*/
 		if (argc < 2) {
 			_tprintf(TEXT("ERRO ARGS INVALIDOS\n"));
@@ -173,6 +168,27 @@ int _tmain(int argc, TCHAR* argv[]) {
 		_tprintf(TEXT("Consumidor %s a iniciar...\n"), username);
 		*/
 		//inicializar
+
+	if (!WaitNamedPipe(PIPE_NAME, 5000)) {
+		_tprintf(_T("[ERRO] Ligação com o pipe! - Error: %d\n"), GetLastError());
+		exit(-1);
+	}
+	hPipe = CreateFile(PIPE_NAME,
+		GENERIC_READ | GENERIC_WRITE,
+		0, 
+		NULL, // default security attributes
+		OPEN_EXISTING, // opens existing pipe
+		0, // default attributes
+		NULL); // no template file
+	
+	if (hPipe == NULL) {
+		_tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
+		exit(-1);
+	}
+	_tprintf(_T("Ligação a escritor bem sucedida!\n"));
+
+
+
 	if (!initMemAndSync(&cdata)) {
 		_tprintf(TEXT("Error creating/opening shared memory and synchronization mechanisms.\n"));
 		exit(1);
@@ -198,6 +214,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 	//fechar os handles para terminar
 	CloseHandle(hThread);
+	CloseHandle(hPipe);
 	UnmapViewOfFile(cdata.sharedMem);
 	CloseHandle(cdata.hMapFile);
 	CloseHandle(cdata.hMutex);
