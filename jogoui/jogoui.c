@@ -10,31 +10,42 @@
 #define MUTEX_NAME TEXT("MUTEX")          // nome do mutex    
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
+#define EVENT_NAME TEXT("EVENT")          // nome do evento
 #define BUFFER_SIZE 10
-
+#define NUSERS 10
 
 
 typedef struct _BufferCell {
-	TCHAR  letra; // 
+	TCHAR  letra; // valor que o produtor gerou
 } BufferCell;
 
 typedef struct _SharedMem {
 	unsigned int c;   // contador partilhado com o numero de consumidores   
-	unsigned int wP;  // posicao do buffer para escrita     
-	unsigned int rP;  // posicao do buffer para escrita  
-	BufferCell buffer[BUFFER_SIZE]; // buffer
+	unsigned int wP;  // posicao do buffer circular para a escrita     
+	unsigned int rP;  // posicao do buffer circular para a escrita  
+	BufferCell buffer[BUFFER_SIZE]; // buffer circular
+	char users[NUSERS];
+	int nusers;
 } SharedMem;
 
 typedef struct _ControlData {
-	unsigned int shutdown;  //  0 = continua, 1 = terminar
-	unsigned int id;        // id do processo  
-	unsigned int count;     // contador do numero de users  
+	unsigned int shutdown;  // flag "continua". 0 = continua, 1 = deve terminar
+	unsigned int id;        // id do processo  (necessario para tp?)
+	unsigned int count;     // contador do numero de vezes (necessario para tp?)  
 	HANDLE hMapFile;        // ficheiro de memoria 
 	SharedMem* sharedMem;   // memoria partilhada
-	HANDLE hMutex;          // mutex
-	HANDLE hWriteSem;       // semaforo 
-	HANDLE hReadSem;        // semaforo 
+	HANDLE hMutex;          // mutex 
+	HANDLE hEvent;          // evento para leitura sincronizada
+	HANDLE hWriteSem;       // semaforo "aguarda por items escritos"
+	HANDLE hReadSem;        // semaforo "aguarda por posições vazias"
+	HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
+	unsigned int nPipes; // maximo de letras
 } ControlData;
+
+typedef struct _PipeData {
+	HANDLE hPipe;
+	TCHAR buff[256];
+} PipeData;
 
 BOOL initMemAndSync(ControlData* cdata)
 {
@@ -110,7 +121,14 @@ DWORD WINAPI consume(LPVOID p)
 			_tprintf(TEXT("vou fechar!\n"));
 			return 0; 
 		}
-		
+
+		//espera que haja algo para ler
+		DWORD waitLetter = WaitForSingleObject(cdata->hEvent, INFINITE);
+
+		if (waitLetter == WAIT_TIMEOUT) {
+			_tprintf(TEXT("Timeout a espera por evento\n"));
+			continue;
+		}
 
 		_tprintf(TEXT("\nARRAY:\n"));
 		for (int i = 0; i < BUFFER_SIZE; i++) {
@@ -130,22 +148,17 @@ DWORD WINAPI consume(LPVOID p)
 			ReleaseMutex(cdata->hMutex);//fim zona critica
 		}
 
-		
+		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);//liberta o semaforo de escrita
 		WaitForSingleObject(cdata->hMutex, INFINITE);
 		cdata->count++;//nr de itens
 		ReleaseMutex(cdata->hMutex);//fim zona critica
-		Sleep(3000);
 	}
 	return 0;
 }
 
 int _tmain(int argc, TCHAR* argv[]) {
-	//OQ FAZER AQUI DE DIFERENTE DO PRODUTOR
-	//ARRANCAR COM A THREAD CONSOME, O CONTADOR É O C INVES DE P
-	//DIZ QUE CONSUMIU X ITENS MAIS NADA
-	//O CONSUMIDOR E O PRODUTOR TEM Q ESTAR EM PROJETOS DIFERENTES !!!!!, PARA COMPILAR
 	ControlData cdata;
-	HANDLE hThread, hPipe;
+	HANDLE hThread, hPipe, hEvent;
 	TCHAR command[100], buf[256];
 	TCHAR* username;
 	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
@@ -191,8 +204,15 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 	if (!initMemAndSync(&cdata)) {
 		_tprintf(TEXT("Error creating/opening shared memory and synchronization mechanisms.\n"));
-		exit(1);
+		exit(-1);
 	}
+
+	hEvent = OpenEvent(EVENT_ALL_ACCESS, FALSE, EVENT_NAME);
+	if (hEvent == NULL) {
+		_tprintf_s(_T("Erro ao abrir evento: %ld\n"), GetLastError());
+		exit(-1);
+	}
+	cdata.hEvent = hEvent;
 
 	WaitForSingleObject(cdata.hMutex, INFINITE);
 	cdata.id = ++(cdata.sharedMem->c); // incrementa o contador partilhado com o numero de consumidores
@@ -207,7 +227,6 @@ int _tmain(int argc, TCHAR* argv[]) {
 
 	} while (_tcscmp(command, TEXT("exit")) != 0);
 
-	ReleaseSemaphore(cdata.hReadSem, 1, NULL); //liberto o semaforo de leitura
 	cdata.shutdown = 1; //flag para terminar a thread
 	WaitForSingleObject(hThread, INFINITE); //espera que a thread termine
 
