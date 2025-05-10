@@ -10,6 +10,7 @@
 #define MUTEX_NAME TEXT("MUTEX")          // nome do mutex   -> em casa devem pensar numa solução para ter mutex´s distintos de forma a não existir perda de performance 
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
+#define EVENT_NAME TEXT("EVENT")          // nome do evento
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
 #define BUFFER_SIZE 6
 #define NUSERS 10
@@ -19,7 +20,7 @@ typedef struct _BufferCell {
 } BufferCell;
 
 typedef struct _SharedMem {
-	unsigned int c;   // contador partilhado com o numero de consumidores   
+	unsigned int c;   //    
 	unsigned int wP;  // posicao do buffer circular para a escrita     
 	unsigned int rP;  // posicao do buffer circular para a escrita  
 	BufferCell buffer[BUFFER_SIZE]; // buffer circular
@@ -34,6 +35,7 @@ typedef struct _ControlData {
 	HANDLE hMapFile;        // ficheiro de memoria 
 	SharedMem* sharedMem;   // memoria partilhada
 	HANDLE hMutex;          // mutex 
+	HANDLE hEvent;          // evento para leitura sincronizada
 	HANDLE hWriteSem;       // semaforo "aguarda por items escritos"
 	HANDLE hReadSem;        // semaforo "aguarda por posições vazias"
 	HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
@@ -117,6 +119,7 @@ BOOL initMemAndSync(ControlData* cdata)
 	//Creates or opens a named or unnamed file mapping object for a specified file.
 	//Criar ou abrir um ficheiro para mapear em memoria
 	BOOL firstProcess = FALSE;
+
 	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//SE CORRER BEM É PORQUE JÁ EXISTE, SE FOR NULL CRIA EM BAIXO
 	if (cdata->hMapFile == NULL) {//se for null cria o
 		cdata->hMapFile = CreateFileMapping(
@@ -150,7 +153,7 @@ BOOL initMemAndSync(ControlData* cdata)
 
 	//inicializa
 	if (firstProcess) {
-		cdata->sharedMem->c = 0; //contador de consumidore
+		cdata->sharedMem->c = 0; //contador de clientes logados
 		cdata->sharedMem->wP = 0; //posicao de 0 a buffersize para escrita
 		cdata->sharedMem->rP = 0; //posicao de 0 a buffersize para leitura
 
@@ -170,6 +173,16 @@ BOOL initMemAndSync(ControlData* cdata)
 		CloseHandle(cdata->hMapFile);
 		return FALSE;
 	}
+
+	HANDLE hEvent;
+	hEvent = CreateEvent(NULL, TRUE, FALSE, EVENT_NAME);
+	if (hEvent == NULL) {
+		_tprintf_s(_T("Erro ao criar evento: %ld\n"), GetLastError());
+		CloseHandle(cdata->hMutex);
+		return FALSE;
+	}
+	cdata->hEvent = hEvent;
+
 
 	//semaforo para escrita
 	cdata->hWriteSem = CreateSemaphore(NULL, BUFFER_SIZE, BUFFER_SIZE, SEM_WRITE_NAME);//cria o semaforo e deixa escrever ate ao maximo logo à cabeca
@@ -201,7 +214,9 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		if (cdata->shutdown)
 			return 0; //flag para terminar
 
+		SetEvent(cdata->hEvent); // sinaliza que o consumidor pode ler
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
+		
 		unsigned indice = rand() % 25;
 		cell.letra = letras[indice];
 
@@ -213,6 +228,8 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
 		
 		ReleaseMutex(cdata->hMutex);//fim zona critica
+
+		ResetEvent(cdata->hEvent); // reseta o evento para que o consumidor possa ler
 
 
 		// lançar as letras no ritmo certo:
@@ -233,8 +250,6 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 			val = 3;
 		}
 
-
-
 		Sleep(1000 * val); // espera o tempo definido no registry
 		cdata->count++;
 
@@ -242,11 +257,6 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 	return 0;
 }
 
-DWORD WINAPI PipesFunc(LPVOID lpParam) {
-	PipeData* info = (PipeData*)lpParam;
-	
-	return 0;
-}
 
 
 void tratarComando(const TCHAR* comando) {
@@ -305,7 +315,6 @@ void tratarComando(const TCHAR* comando) {
 
 DWORD WINAPI comunica(LPVOID tdata) {
 	ControlData* cdata = (ControlData*)tdata;
-	//criar pipe para cada jogador
 	//ainda nao sei o que mandar pelo pipe, melhor coisa seria estruturas como em SO
 	return 0;
 }
@@ -414,15 +423,17 @@ int _tmain(int argc, TCHAR* argv[])
 	_tprintf(TEXT("\n"));
 
 	
-	hThread = CreateThread(NULL, 0, PipesFunc, &cdata, 0, NULL);
+	_tprintf(TEXT("Type in 'exit' to leave.\n"));
+
+	
+	hThread = CreateThread(NULL, 0, enviaLetras, &cdata, 0, NULL);
 
 	if (hThread == NULL) {
-		_tprintf(_T("[ERRO] Criar thread! Error: %d\n"), GetLastError());
+		_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
 		saidaordeira(&cdata, hThread, hSingle_instance);
-		return -1;
+		return 1;
 	}
 
-	_tprintf(TEXT("Type in 'exit' to leave.\n"));
 
 	hThrTeclado = CreateThread(NULL, 0, keyboardThread, &cdata, 0, NULL);
 	if (hThrTeclado == NULL) {
@@ -430,7 +441,7 @@ int _tmain(int argc, TCHAR* argv[])
 		saidaordeira(&cdata, hThread, hSingle_instance);
 		return 1;
 	}
-	
+
 	do {
 		BOOL fConnected = FALSE;
 		unsigned int i = 0;
@@ -472,21 +483,7 @@ int _tmain(int argc, TCHAR* argv[])
 			cdata.hPipe[cdata.nPipes] = hPipe;
 			cdata.count++;
 			ReleaseMutex(cdata.hMutex);
-		}
-
-		
-
-		hThread = CreateThread(NULL, 0, enviaLetras, &cdata, 0, NULL);
-
-		if (hThread == NULL) {
-			_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
-			saidaordeira(&cdata, hThread, hSingle_instance);
-			return 1;
-		}
-
-
-
-
+		}	
 		
 	} while (!(cdata.shutdown));
 
