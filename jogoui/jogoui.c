@@ -223,7 +223,7 @@ int _tmain(int argc, TCHAR* argv[]) {
 		return -1;
 	}
 
-	//(1 = válido, 0 = inválido)
+	//(0 = válido, 1 = inválido)
 	if (!ReadFile(hPipe, &msg, sizeof(PipeMsg), &bytesRead, NULL) || bytesRead == 0) {
 		_tprintf(_T("[ERRO] Receber resposta! Error: %d\n"), GetLastError());
 		CloseHandle(hPipe);
