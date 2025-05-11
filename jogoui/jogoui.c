@@ -36,20 +36,19 @@ typedef struct _ControlData {
 	SharedMem* sharedMem;   // memoria partilhada
 	HANDLE hMutex;          // mutex 
 	HANDLE hEvent;          // evento para leitura sincronizada
-	HANDLE hWriteSem;       // semaforo "aguarda por items escritos"
-	HANDLE hReadSem;        // semaforo "aguarda por posições vazias"
 	HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
-	unsigned int nPipes; // maximo de letras
+	unsigned int nPipes; // maximo de pipes
 } ControlData;
 
-typedef struct _PipeData {
-	HANDLE hPipe;
+typedef struct _PipeMsg {
+	HANDLE hPipe; //necessario?
 	TCHAR buff[256];
-} PipeData;
+	BOOL isUsernameInvalid;
+	TCHAR username[26];
+} PipeMsg;
 
 BOOL initMemAndSync(ControlData* cdata)
 {
-	BOOL firstProcess = FALSE;
 	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//se correr bem ja existe, se não, cria depois
 	if (cdata->hMapFile == NULL) {//se for null cria
 		cdata->hMapFile = CreateFileMapping(
@@ -90,21 +89,6 @@ BOOL initMemAndSync(ControlData* cdata)
 		return FALSE;
 	}
 
-	//semaforo para escrita
-	cdata->hWriteSem = CreateSemaphore(NULL, BUFFER_SIZE, BUFFER_SIZE, SEM_WRITE_NAME);
-	if (cdata->hWriteSem != NULL) {
-		cdata->hReadSem = CreateSemaphore(NULL, 0, BUFFER_SIZE, SEM_READ_NAME);
-	}
-
-	if (cdata->hReadSem == NULL) {
-		_tprintf(TEXT("ERRO NO SEMAFORO LEITURA %d "), GetLastError());
-		UnmapViewOfFile(cdata->sharedMem);
-		CloseHandle(cdata->hMapFile);
-		CloseHandle(cdata->hMutex);
-		CloseHandle(cdata->hWriteSem);
-		return FALSE;
-	}
-
 	return TRUE;
 }
 
@@ -123,7 +107,7 @@ DWORD WINAPI consume(LPVOID p)
 		}
 
 		//espera que haja algo para ler
-		DWORD waitLetter = WaitForSingleObject(cdata->hEvent, INFINITE);
+		DWORD waitLetter = WaitForSingleObject(cdata->hEvent, 15000);
 
 		if (waitLetter == WAIT_TIMEOUT) {
 			_tprintf(TEXT("Timeout a espera por evento\n"));
@@ -148,7 +132,6 @@ DWORD WINAPI consume(LPVOID p)
 			ReleaseMutex(cdata->hMutex);//fim zona critica
 		}
 
-		ReleaseSemaphore(cdata->hWriteSem, 1, NULL);//liberta o semaforo de escrita
 		WaitForSingleObject(cdata->hMutex, INFINITE);
 		cdata->count++;//nr de itens
 		ReleaseMutex(cdata->hMutex);//fim zona critica
@@ -160,7 +143,9 @@ int _tmain(int argc, TCHAR* argv[]) {
 	ControlData cdata;
 	HANDLE hThread, hPipe, hEvent;
 	TCHAR command[100], buf[256];
-	TCHAR* username;
+	DWORD dwMode;
+	BOOL fSuccess = FALSE;
+	PipeMsg msg;
 	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
 
 #ifdef UNICODE
@@ -168,6 +153,14 @@ int _tmain(int argc, TCHAR* argv[]) {
 	_setmode(_fileno(stdout), _O_WTEXT);   // *** stdout ***
 	_setmode(_fileno(stderr), _O_WTEXT);   // *** stderr ***
 #endif
+
+	if (argc != 2) {
+		_tprintf(_T("Necessita inserir um nome"));
+		exit(1);
+	};
+		
+
+
 
 	cdata.shutdown = 0;
 	cdata.count = 0;
@@ -193,12 +186,67 @@ int _tmain(int argc, TCHAR* argv[]) {
 		OPEN_EXISTING, // opens existing pipe
 		0 | FILE_FLAG_OVERLAPPED, // default attributes
 		NULL); // no template file
+
+	if (hPipe == INVALID_HANDLE_VALUE) {
+		_tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
+		exit(-1);
+	}
+
+	dwMode = PIPE_READMODE_MESSAGE;
+	fSuccess = SetNamedPipeHandleState(
+		hPipe,    // handle para o pipe 
+		&dwMode,  // Novo modo do pipe 
+		NULL,     // N o   para mudar max. bytes 
+		NULL);    // N o   para mudar max. timeout
+
+	if (!fSuccess) {
+		CloseHandle(hPipe);
+		return -1;
+	}
+
+	// login attempt
+
+	TCHAR loginMsg[256];
+	DWORD bytesWritten;
+	DWORD bytesRead;
+	
+
+	_tprintf(_T("A fazer login como %s ...\n"), argv[1]);
+	
+	ZeroMemory(&msg, sizeof(PipeMsg)); 
+	_tcscpy_s(msg.username, 26, argv[1]);
+
+
+	if (!WriteFile(hPipe, &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+		_tprintf(_T("[ERRO] Enviar login! Error: %d\n"), GetLastError());
+		CloseHandle(hPipe);
+		return -1;
+	}
+
+	//(1 = válido, 0 = inválido)
+	if (!ReadFile(hPipe, &msg, sizeof(PipeMsg), &bytesRead, NULL) || bytesRead == 0) {
+		_tprintf(_T("[ERRO] Receber resposta! Error: %d\n"), GetLastError());
+		CloseHandle(hPipe);
+		return -1;
+	}
+
+	_tprintf(_T("Resposta do árbitro: %d\n"), msg.isUsernameInvalid);
+	if (msg.isUsernameInvalid == 1) { 
+		_tprintf(_T("[ERRO] Username inválido ou já em uso\n"));
+		CloseHandle(hPipe);
+		return -1;
+	}
+
+	_tprintf(_T("Login bem sucedido com o username: %s!\n"), argv[1]);
+
+	
+
 	
 	if (hPipe == NULL) {
 		_tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
 		exit(-1);
 	}
-	_tprintf(_T("Ligação a escritor bem sucedida!\n"));
+	_tprintf(_T("Ligação ao arbitro bem sucedida!\n"));
 
 
 
@@ -237,7 +285,5 @@ int _tmain(int argc, TCHAR* argv[]) {
 	UnmapViewOfFile(cdata.sharedMem);
 	CloseHandle(cdata.hMapFile);
 	CloseHandle(cdata.hMutex);
-	CloseHandle(cdata.hWriteSem);
-	CloseHandle(cdata.hReadSem);
 	return 0;
 }
