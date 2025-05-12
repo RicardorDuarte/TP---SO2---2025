@@ -30,8 +30,6 @@ typedef struct _SharedMem {
 
 typedef struct _ControlData {
 	unsigned int shutdown;  // flag "continua". 0 = continua, 1 = deve terminar
-	unsigned int id;        // id do processo  (necessario para tp?)
-	unsigned int count;     // contador do numero de vezes (necessario para tp?)  
 	HANDLE hMapFile;        // ficheiro de memoria 
 	SharedMem* sharedMem;   // memoria partilhada
 	HANDLE hMutex;          // mutex 
@@ -46,6 +44,7 @@ typedef struct _PipeMsg {
 	BOOL isUsernameInvalid;
 	TCHAR username[26];
 } PipeMsg;
+
 
 
 BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
@@ -199,7 +198,7 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 
 		SetEvent(cdata->hEvent); // sinaliza que o consumidor pode ler
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
-		
+
 		unsigned indice = rand() % 25;
 		cell.letra = letras[indice];
 
@@ -209,7 +208,7 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
 		if (cdata->sharedMem->wP == BUFFER_SIZE)
 			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
-		
+
 		ReleaseMutex(cdata->hMutex);//fim zona critica
 
 		ResetEvent(cdata->hEvent); // reseta o evento para que o consumidor possa ler
@@ -255,7 +254,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	_tprintf(_T("Comando recebido: %s\n"), comando);
 	if (_tcscmp(comando, _T("exit")) == 0) {
 		WaitForSingleObject(cdata->hMutex, INFINITE);
-		cdata->shutdown = 1; 
+		cdata->shutdown = 1;
 		ReleaseMutex(cdata->hMutex);
 		_tprintf(_T("A terminar...\n"));
 	}
@@ -298,7 +297,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 
 
 
-	
+
 	RegCloseKey(hKey);
 	return;
 }
@@ -306,7 +305,130 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 
 DWORD WINAPI comunica(LPVOID tdata) {
 	ControlData* cdata = (ControlData*)tdata;
-	//ainda nao sei o que mandar pelo pipe, melhor coisa seria estruturas como em SO
+	HANDLE hPipe = cdata->hPipe[cdata->nPipes - 1]; 
+	PipeMsg receivedMsg;
+	PipeMsg responseMsg;
+	DWORD bytesRead, bytesWritten;
+	BOOL usernameExists = FALSE;
+	BOOL fSuccess;
+
+	_tprintf(_T("Thread de comunicação iniciada para pipe (handle: %p)\n"), hPipe);
+
+	if (hPipe == INVALID_HANDLE_VALUE || hPipe == NULL) {
+		_tprintf(_T("Handle de pipe inválido!\n"));
+		return 1;
+	}
+	// Recebe o primeiro pedido (login)
+	fSuccess = ReadFile(hPipe, &receivedMsg, sizeof(PipeMsg), &bytesRead, NULL);
+
+	if (!fSuccess || bytesRead != sizeof(PipeMsg)) {
+		_tprintf(_T("Erro ao ler mensagem inicial (%d)\n"), GetLastError());
+		DisconnectNamedPipe(hPipe);
+		CloseHandle(hPipe);
+		return 1;
+	}
+
+	WaitForSingleObject(cdata->hMutex, INFINITE);
+
+	// Verifica se username já existe
+	for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+		if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
+			usernameExists = TRUE;
+			break;
+		}
+	}
+
+	if (!usernameExists && cdata->sharedMem->nusers < NUSERS) {
+		_tcscpy_s(cdata->sharedMem->users[cdata->sharedMem->nusers], 26, receivedMsg.username);
+		cdata->sharedMem->nusers++;
+		responseMsg.isUsernameInvalid = FALSE;
+		_tprintf(_T("Novo user registado: %s\n"), receivedMsg.username);
+	}
+	else {
+		responseMsg.isUsernameInvalid = TRUE;
+		_tprintf(_T("Login recusado para: %s\n"), receivedMsg.username);
+	}
+
+	ReleaseMutex(cdata->hMutex);
+
+	// Envia resposta do login
+	fSuccess = WriteFile(hPipe, &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+	if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
+		_tprintf(_T("Erro ao enviar resposta de login (%d)\n"), GetLastError());
+		DisconnectNamedPipe(hPipe);
+		CloseHandle(hPipe);
+		return 1;
+	}
+
+	// Se inválido, termina aqui
+	if (responseMsg.isUsernameInvalid) {
+		DisconnectNamedPipe(hPipe);
+		CloseHandle(hPipe);
+		return 0;
+	}
+
+	_tprintf(_T("Ligação com %s estabelecida com sucesso!\n"), receivedMsg.username);
+
+	// Loop principal de comunicação
+	while (1) {
+		// Limpa as mensagens para nova comunicação
+		ZeroMemory(&receivedMsg, sizeof(PipeMsg));
+		ZeroMemory(&responseMsg, sizeof(PipeMsg));
+
+		// Lê mensagem do cliente
+		fSuccess = ReadFile(hPipe, &receivedMsg, sizeof(PipeMsg), &bytesRead, NULL);
+
+		if (!fSuccess || bytesRead != sizeof(PipeMsg)) {
+			DWORD err = GetLastError();
+			if (err == ERROR_BROKEN_PIPE) {
+				_tprintf(_T("Cliente %s desconectou\n"), receivedMsg.username);
+			}
+			else {
+				_tprintf(_T("Erro ao ler mensagem (%d)\n"), err);
+			}
+			break;
+		}
+
+		_tprintf(_T("Mensagem recebida de %s: %s\n"), receivedMsg.username, receivedMsg.buff);
+
+		// Processa comando
+		if (_tcscmp(receivedMsg.buff, _T("exit")) == 0) {
+			_tprintf(_T("Cliente %s solicitou saída\n"), receivedMsg.username);
+			break;
+		}
+
+		// Prepara resposta
+		_tcscpy_s(responseMsg.username, 26, receivedMsg.username);
+		_stprintf_s(responseMsg.buff, 256, _T("%s"), receivedMsg.buff);
+		responseMsg.isUsernameInvalid = FALSE;
+
+		// Envia resposta
+		fSuccess = WriteFile(hPipe, &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+		if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
+			_tprintf(_T("Erro ao enviar resposta (%d)\n"), GetLastError());
+			break;
+		}
+	}
+
+	// Remove usuário da lista
+	WaitForSingleObject(cdata->hMutex, INFINITE);
+	for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+		if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
+			// Move os usuários posteriores para preencher o espaço
+			for (int j = i; j < cdata->sharedMem->nusers - 1; j++) {
+				_tcscpy_s(cdata->sharedMem->users[j], 26, cdata->sharedMem->users[j + 1]);
+			}
+			cdata->sharedMem->nusers--;
+			break;
+		}
+	}
+	ReleaseMutex(cdata->hMutex);
+
+	// Fecha conexão
+	DisconnectNamedPipe(hPipe);
+	CloseHandle(hPipe);
+
+	_tprintf(_T("Conexão com %s encerrada\n"), receivedMsg.username);
 	return 0;
 }
 
@@ -338,7 +460,7 @@ DWORD WINAPI keyboardThread(LPVOID p) {
 
 	do {
 		_getts_s(command, 100);
-		tratarComando(command, (LPVOID) & cdata);
+		tratarComando(command, (LPVOID)&cdata);
 		_tprintf(_T("shutdown (thread): %d\n"), cdata->shutdown);
 	} while (1);
 
@@ -346,9 +468,8 @@ DWORD WINAPI keyboardThread(LPVOID p) {
 }
 
 BOOL isUsernameInvalid(const TCHAR* username) {
-	
-}
 
+}
 
 
 
@@ -357,7 +478,7 @@ int _tmain(int argc, TCHAR* argv[])
 {
 	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
 	ControlData cdata;
-	HANDLE hThread = NULL,hThrTeclado = NULL,hPipe = NULL;
+	HANDLE hThread = NULL, hThrTeclado = NULL, hPipe = NULL, hMSG=NULL;
 	TCHAR command[100];
 	PipeMsg pidata;
 
@@ -368,7 +489,6 @@ int _tmain(int argc, TCHAR* argv[])
 #endif
 
 	cdata.shutdown = 0; //flag
-	cdata.count = 0; //numero de 
 	cdata.nPipes = 0; //numero de pipes
 
 
@@ -400,7 +520,7 @@ int _tmain(int argc, TCHAR* argv[])
 	}
 	_tprintf(TEXT("\n"));
 
-	
+
 	_tprintf(TEXT("Type in 'exit' to leave.\n"));
 
 	/*
@@ -421,7 +541,7 @@ int _tmain(int argc, TCHAR* argv[])
 	}
 
 
-	
+
 	do {
 		BOOL fConnected = FALSE;
 		unsigned int i = 0;
@@ -432,8 +552,8 @@ int _tmain(int argc, TCHAR* argv[])
 			PIPE_READMODE_MESSAGE |   // com modo message-read e
 			PIPE_WAIT,                // bloqueante 
 			PIPE_UNLIMITED_INSTANCES, // max. instancias (255)
-			sizeof(TCHAR),                  // tam buffer output
-			sizeof(TCHAR),                  // tam buffer input 
+			sizeof(PipeMsg),                  // tam buffer output
+			sizeof(PipeMsg),                  // tam buffer input 
 			50,                     // time-out p/ cliente 5k milisegundos (0->default=50)
 			NULL);                    // atributos seguran�a default
 
@@ -453,65 +573,23 @@ int _tmain(int argc, TCHAR* argv[])
 			saidaordeira(&cdata, hThread, hSingle_instance);
 			return -1;
 		}
-	
+
 		if (fConnected) {
-			PipeMsg receivedMsg;
-			DWORD bytesRead;
-			DWORD bytesWritten;
-			PipeMsg responseMsg;
-			BOOL usernameExists = FALSE;
+			_tprintf(_T("Cliente conectado. Handle do pipe: %p\n"), hPipe);
 
-			ZeroMemory(&receivedMsg, sizeof(PipeMsg));
-			ZeroMemory(&responseMsg, sizeof(PipeMsg));
-
-			if (ReadFile(hPipe, &receivedMsg, sizeof(PipeMsg), &bytesRead, NULL) && bytesRead == sizeof(PipeMsg)) {
-				ZeroMemory(&responseMsg, sizeof(PipeMsg));
-
-				WaitForSingleObject(cdata.hMutex, INFINITE);
-
-				// existe?
-				for (int i = 0; i < cdata.sharedMem->nusers; i++) {
-					if (_tcscmp(cdata.sharedMem->users[i], receivedMsg.username) == 0) {
-						usernameExists = TRUE;
-						break;
-					}
-				}
-
-				if (!usernameExists && cdata.sharedMem->nusers < NUSERS) {
-					// adiciona user
-					_tcscpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], 26, receivedMsg.username);
-					cdata.sharedMem->nusers++;
-
-					// resposta posivita
-					responseMsg.isUsernameInvalid = FALSE;
-					_tprintf(_T("Novo user registado: %s\n"), receivedMsg.username);
-				}
-				else {
-					// resposta negativa
-					responseMsg.isUsernameInvalid = TRUE;
-					_tprintf(_T("Login recusado para: %s\n"), receivedMsg.username);
-				}
-
-				ReleaseMutex(cdata.hMutex);
-
-				WriteFile(hPipe, &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
-
-				if (!responseMsg.isUsernameInvalid) {
-					DisconnectNamedPipe(hPipe);
-					CloseHandle(hPipe);
-					continue;
-				}
-			}
-
-			_tprintf(_T("Ligação a leitor bem sucedida!\n"));
-
-			WaitForSingleObject(cdata.hMutex, INFINITE);
-			//adicionar o pipe à lista de pipes
+			_tprintf(_T("nPipes antes: %d\n"), cdata.nPipes);
 			cdata.hPipe[cdata.nPipes] = hPipe;
-			cdata.count++;
 			cdata.nPipes++;
-			ReleaseMutex(cdata.hMutex);
-		}	
+			_tprintf(_T("nPipes depois: %d, handle armazenado: %p\n"), cdata.nPipes, hPipe);
+
+			hMSG = CreateThread(NULL, 0, comunica, &cdata, 0, NULL);
+			if (hThrTeclado == NULL) {
+				_tprintf(TEXT("Error creating keyboard thread (%d)\n"), GetLastError());
+				saidaordeira(&cdata, hThread, hSingle_instance);
+				return 1;
+			}
+			
+		}
 
 
 		_tprintf(_T("shutdown %d\n"), cdata.shutdown);
