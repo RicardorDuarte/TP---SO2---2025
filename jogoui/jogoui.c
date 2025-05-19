@@ -20,12 +20,13 @@ typedef struct _BufferCell {
 } BufferCell;
 
 typedef struct _SharedMem {
-	unsigned int c;   // contador partilhado com o numero de consumidores   
-	unsigned int wP;  // posicao do buffer circular para a escrita     
-	unsigned int rP;  // posicao do buffer circular para a escrita  
-	BufferCell buffer[BUFFER_SIZE]; // buffer circular
-	char users[NUSERS];
-	int nusers;
+    unsigned int c;   //    
+    unsigned int wP;  // posicao do buffer escrita     
+    unsigned int rP;  // posicao do buffer leitura
+    BufferCell buffer[BUFFER_SIZE]; // buffer circular
+    char users[NUSERS][25]; // array de strings para os nomes dos jogadores
+    int pontuacao[NUSERS]; // array de inteiros para as pontuações dos jogadores
+    int nusers;
 } SharedMem;
 
 typedef struct _ControlData {
@@ -39,6 +40,7 @@ typedef struct _ControlData {
 	TCHAR username[26];         // Novo campo para guardar username do cliente
 	TCHAR lastCommand[256];     // Último comando lido
 	HANDLE hSendEvent; // evento para sinalizar que o produtor pode enviar dados
+
 } ControlData;
 
 typedef struct _PipeMsg {
@@ -100,10 +102,10 @@ DWORD WINAPI consume(LPVOID p)
 	BufferCell cell;
 	int ranTime;
 
-	while (1) {
+	while (cdata->shutdown==0) {
 
 		if (cdata->shutdown == 1) {
-			_tprintf(TEXT("vou fechar!\n"));
+			_tprintf(TEXT("vou fechar mem partilhada!\n"));
 			return 0;
 		}
 
@@ -138,233 +140,174 @@ DWORD WINAPI consume(LPVOID p)
 	}
 	return 0;
 }
+DWORD WINAPI recebePipe(LPVOID param) {
+    ControlData* cdata = (ControlData*)param;
+    PipeMsg response;
+    DWORD bytesRead;
 
+    while (cdata->shutdown==0) {
+        if (cdata->shutdown) {
+            return 0;
+        }
 
-DWORD WINAPI sendThread(LPVOID param) {
-	ControlData* cdata = (ControlData*)param;
-	PipeMsg msg;
-	DWORD bytesRead = 0, cbWritten;
-	OVERLAPPED OverlWr = { 0 };
-	HANDLE hPipe = cdata->hPipe[0];
+        // Espera por respostas do servidor
+        if (ReadFile(cdata->hPipe[0], &response, sizeof(PipeMsg), &bytesRead, NULL)) {
+            if (bytesRead > 0) {
+                _tprintf(_T("Resposta recebida: %s\n"), response.buff);
 
-	// Primeiro envia o nome de usuário para login
-	WaitForSingleObject(cdata->hMutex, INFINITE);
-	ZeroMemory(&msg, sizeof(PipeMsg));
-	_tcscpy_s(msg.username, 26, cdata->username);
-	_tcscpy_s(msg.buff, 256, _T("login"));
-	ReleaseMutex(cdata->hMutex);
-
-	// Envia mensagem de login
-
-	_tprintf(_T("Enviando login...\n"));
-
-	// Envia mensagem de login
-	if (!WriteFile(hPipe, &msg, sizeof(PipeMsg), &cbWritten, NULL)) {
-		_tprintf(_T("[ERRO] ao enviar login! Error: %d\n"), GetLastError());
-		return -1;
-	}
-
-	_tprintf(_T("Login enviado, aguardando resposta...\n"));
-
-
-	// Espera resposta do login
-	PipeMsg loginResponse;
-	if (ReadFile(hPipe, &loginResponse, sizeof(PipeMsg), &bytesRead, NULL) && bytesRead > 0) {
-		if (loginResponse.isUsernameInvalid) {
-			_tprintf(_T("[ERRO] Nome de usuário inválido ou já em uso\n"));
-			return -1;
-		}
-		_tprintf(_T("Login bem-sucedido como %s\n"), cdata->username);
-	}
-
-	while (1) {
-		WaitForSingleObject(cdata->hSendEvent, INFINITE);
-
-		WaitForSingleObject(cdata->hMutex, INFINITE);
-		if (cdata->shutdown) { // Verifica se deve terminar
-			ReleaseMutex(cdata->hMutex);
-			break;
-		}
-		ZeroMemory(&msg, sizeof(PipeMsg));
-		_tcscpy_s(msg.username, 26, cdata->username);
-		_tcscpy_s(msg.buff, 256, cdata->lastCommand);
-		ReleaseMutex(cdata->hMutex);
-
-		// Envia comando
-		_tprintf(_T("enviar comando! %s\n"), msg.buff);
-
-		if (!WriteFile(hPipe, &msg, sizeof(PipeMsg), &cbWritten, NULL)) {
-			_tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
-			break;
-		}
-
-		// Se for comando de saída, termina
-		if (_tcscmp(msg.buff, _T("exit")) == 0)
-			break;
-
-		// Espera resposta (com timeout)
-		PipeMsg response;
-		DWORD waitResult = WaitForSingleObject(hPipe, 5000); // Timeout de 5 segundos
-		if (waitResult == WAIT_OBJECT_0) {
-			if (ReadFile(hPipe, &response, sizeof(PipeMsg), &bytesRead, NULL) && bytesRead > 0) {
-				_tprintf(_T("Resposta: %s\n"), response.buff);
-			}
-		}
-		else if (waitResult == WAIT_TIMEOUT) {
-			_tprintf(_T("Timeout esperando por resposta\n"));
-		}
-		else {
-			_tprintf(_T("Erro ao esperar por resposta\n"));
-			break;
-		}
-	}
-
-	return 0;
+                // Se for uma mensagem de shutdown
+                if (_tcscmp(response.buff, _T("close")) == 0) {
+                    _tprintf(_T("Expulso pelo administrador\n"));
+                    cdata->shutdown = 1;
+                    return 0;
+                }
+            }
+        }
+        else {
+            DWORD err = GetLastError();
+            if (err == ERROR_BROKEN_PIPE) {
+                _tprintf(_T("Servidor desconectou\n"));
+				cdata->shutdown = 1;
+				return 0;
+            }
+            else {
+                _tprintf(_T("Erro ao ler resposta (%d)\n"), err);
+            }
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int _tmain(int argc, TCHAR* argv[]) {
-	ControlData cdata;
-	HANDLE hThread, hPipe, hEvent;
-	TCHAR command[100], buf[256];
-	DWORD dwMode;
-	BOOL fSuccess = FALSE;
-	PipeMsg msg;
-	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
+    ControlData cdata;
+    HANDLE hThread, hPipe;
+    TCHAR command[100];
+    LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
 
 #ifdef UNICODE
-	_setmode(_fileno(stdin), _O_WTEXT);    // *** stdin  ***  
-	_setmode(_fileno(stdout), _O_WTEXT);   // *** stdout ***
-	_setmode(_fileno(stderr), _O_WTEXT);   // *** stderr ***
+    _setmode(_fileno(stdin), _O_WTEXT);
+    _setmode(_fileno(stdout), _O_WTEXT);
+    _setmode(_fileno(stderr), _O_WTEXT);
 #endif
 
-	if (argc != 2) {
-		_tprintf(_T("Necessita inserir um nome"));
-		exit(1);
-	};
+    if (argc != 2) {
+        _tprintf(_T("Necessita inserir um nome\n"));
+        exit(1);
+    }
 
+    cdata.shutdown = 0;
+    _tcsncpy_s(cdata.username, 26, argv[1], _TRUNCATE);
 
+    // Conexão com o pipe
+    if (!WaitNamedPipe(PIPE_NAME, 5000)) {
+        _tprintf(_T("[ERRO] Pipe não disponível - Error: %d\n"), GetLastError());
+        exit(-1);
+    }
 
+    hPipe = CreateFile(
+        PIPE_NAME,
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        NULL,
+        OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED,
+        NULL);
 
-	cdata.shutdown = 0;
-	/*/
-		if (argc < 2) {
-			_tprintf(TEXT("ERRO ARGS INVALIDOS\n"));
-			exit(1);
-		}
-		username = argv[1];
-		_tprintf(TEXT("Consumidor %s a iniciar...\n"), username);
-		*/
-		//inicializar
+    if (hPipe == INVALID_HANDLE_VALUE) {
+        _tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
+        exit(-1);
+    }
 
-	if (!WaitNamedPipe(PIPE_NAME, 5000)) {
-		_tprintf(_T("[ERRO] Ligação com o pipe! - Error: %d\n"), GetLastError());
-		exit(-1);
-	}
-	hPipe = CreateFile(PIPE_NAME,
-		GENERIC_READ |
-		GENERIC_WRITE,
-		0 | FILE_SHARE_READ | FILE_SHARE_WRITE,
-		NULL, // default security attributes
-		OPEN_EXISTING, // opens existing pipe
-		0 | FILE_FLAG_OVERLAPPED, // default attributes
-		NULL); // no template file
+    DWORD dwMode = PIPE_READMODE_MESSAGE;
+    if (!SetNamedPipeHandleState(hPipe, &dwMode, NULL, NULL)) {
+        CloseHandle(hPipe);
+        _tprintf(_T("[ERRO] Configurar pipe! Error: %d\n"), GetLastError());
+        return -1;
+    }
 
-	if (hPipe == INVALID_HANDLE_VALUE) {
-		_tprintf(_T("[ERRO] Criar pipe! Error: %d\n"), GetLastError());
-		exit(-1);
-	}
+    cdata.hPipe[0] = hPipe;
+    cdata.nPipes = 1;
 
-	dwMode = PIPE_READMODE_MESSAGE;
-	fSuccess = SetNamedPipeHandleState(
-		hPipe,    // handle para o pipe 
-		&dwMode,  // Novo modo do pipe 
-		NULL,     // N o   para mudar max. bytes 
-		NULL);    // N o   para mudar max. timeout
+    // Processo de login no main()
+    PipeMsg loginMsg, loginResponse;
+    DWORD bytesWritten, bytesRead;
 
-	if (!fSuccess) {
-		CloseHandle(hPipe);
-		return -1;
-	}
+    ZeroMemory(&loginMsg, sizeof(PipeMsg));
+    _tcscpy_s(loginMsg.username, 26, cdata.username);
+    _tcscpy_s(loginMsg.buff, 256, _T("login"));
 
-	cdata.hPipe[0] = hPipe;
-	cdata.nPipes = 1; // numero de pipes
-	// login attempt
+    _tprintf(_T("Enviando login...\n"));
+    if (!WriteFile(hPipe, &loginMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+        _tprintf(_T("[ERRO] ao enviar login! Error: %d\n"), GetLastError());
+        CloseHandle(hPipe);
+        return -1;
+    }
 
-	TCHAR loginMsg[256];
-	DWORD bytesWritten;
-	DWORD bytesRead;
+    _tprintf(_T("Aguardando resposta de login...\n"));
+    if (!ReadFile(hPipe, &loginResponse, sizeof(PipeMsg), &bytesRead, NULL)) {
+        _tprintf(_T("[ERRO] ao ler resposta de login! Error: %d\n"), GetLastError());
+        CloseHandle(hPipe);
+        return -1;
+    }
 
+    if (loginResponse.isUsernameInvalid) {
+        _tprintf(_T("[ERRO] Nome de usuário inválido ou já em uso\n"));
+        CloseHandle(hPipe);
+        return -1;
+    }
 
-	_tprintf(_T("A fazer login como %s ...\n"), argv[1]);
+    _tprintf(_T("Login bem-sucedido como %s\n"), cdata.username);
 
-	ZeroMemory(&msg, sizeof(PipeMsg));
-	_tcsncpy_s(cdata.username, 26, argv[1],_TRUNCATE);
+    // Inicia thread para receber respostas
+    HANDLE hReceiveThread = CreateThread(NULL, 0, recebePipe, &cdata, 0, NULL);
+    if (hReceiveThread == NULL) {
+        _tprintf(_T("Erro ao criar thread de recepção\n"));
+        CloseHandle(hPipe);
+        return -1;
+    }
 
-	cdata.hSendEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-	if (cdata.hSendEvent == NULL) {
-		_tprintf(_T("[ERRO] criar evento de envio! Error: %d\n"), GetLastError());
-		return -1;
-	}
+    // Inicializa memória compartilhada
+    if (!initMemAndSync(&cdata)) {
+        _tprintf(TEXT("Erro ao inicializar memória compartilhada\n"));
+        CloseHandle(hPipe);
+        CloseHandle(hReceiveThread);
+        exit(-1);
+    }
 
-	HANDLE hSendThread = CreateThread(NULL, 0, sendThread, &cdata, 0, NULL);
-	if (hSendThread == NULL) {
-		_tprintf(_T("Erro ao criar thread de envio\n"));
-		CloseHandle(hPipe);
-		return -1;
-	}
+    _tprintf(TEXT("Para comandos digite :(comando)\nPara jogar introduza a palavra\n"));
 
-	// Espera um pouco para ver se o login foi bem-sucedido
-	if (WaitForSingleObject(hSendThread, 3000) == WAIT_OBJECT_0) {
-		DWORD exitCode;
-		GetExitCodeThread(hSendThread, &exitCode);
-		if (exitCode != 0) {
-			_tprintf(_T("Erro no login, terminando...\n"));
-			CloseHandle(hPipe);
-			return -1;
-		}
-	}
+    // Loop principal para enviar comandos
+    do {
+        _getts_s(command, 100);
+		if (command[0] == _T(':')) {
+            PipeMsg cmdMsg;
+            ZeroMemory(&cmdMsg, sizeof(PipeMsg));
+            _tcscpy_s(cmdMsg.username, 26, cdata.username);
+            _tcscpy_s(cmdMsg.buff, 256, command);
 
-	if (!initMemAndSync(&cdata)) {
-		_tprintf(TEXT("Error creating/opening shared memory and synchronization mechanisms.\n"));
-		exit(-1);
-	}
+            _tprintf(_T("Enviando comando: %s\nUsername %s\n"), cmdMsg.buff,cmdMsg.username);
+            if (!WriteFile(hPipe, &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+                _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
+                break;
+            }
 
-	hEvent = OpenEvent(EVENT_ALL_ACCESS, FALSE, EVENT_NAME);
-	if (hEvent == NULL) {
-		_tprintf_s(_T("Erro ao abrir evento: %ld\n"), GetLastError());
-		exit(-1);
-	}
-	cdata.hEvent = hEvent;
+		}   
 
-	WaitForSingleObject(cdata.hMutex, INFINITE);
-	ReleaseMutex(cdata.hMutex);
+        if (_tcscmp(command, TEXT(":sair")) == 0) {
+            break;
+        }
+    } while (cdata.shutdown==0);
 
-	hThread = CreateThread(NULL, 0, consume, &cdata, 0, NULL);
+    // Limpeza
+    cdata.shutdown = 1;
+    WaitForSingleObject(hReceiveThread, 2000);
+    _tprintf(_T("Vou encerrar!!\n"));
+    CloseHandle(hReceiveThread);
+    CloseHandle(hPipe);
+    UnmapViewOfFile(cdata.sharedMem);
+    CloseHandle(cdata.hMapFile);
+    CloseHandle(cdata.hMutex);
 
-	_tprintf(TEXT("Type in 'exit' to leave.\n"));
-
-	do {
-		_getts_s(command, 100);
-		WaitForSingleObject(cdata.hMutex, INFINITE);
-		_tcscpy_s(cdata.lastCommand, 256, command);
-		ReleaseMutex(cdata.hMutex);
-		SetEvent(cdata.hSendEvent);
-
-		if (_tcscmp(command, TEXT("exit")) == 0) {
-			WaitForSingleObject(hSendThread, 2000); // Espera a thread de envio terminar
-			break;
-		}
-	} while (1);
-
-	cdata.shutdown = 1; //flag para terminar a thread
-	WaitForSingleObject(hThread, INFINITE); //espera que a thread termine
-
-
-	//fechar os handles para terminar
-	CloseHandle(hThread);
-	CloseHandle(hPipe);
-	UnmapViewOfFile(cdata.sharedMem);
-	CloseHandle(cdata.hMapFile);
-	CloseHandle(cdata.hMutex);
-	return 0;
+    return 0;
 }
