@@ -286,6 +286,11 @@ int _tmain(int argc, TCHAR* argv[]) {
             _tcscpy_s(cmdMsg.username, 26, cdata.username);
             _tcscpy_s(cmdMsg.buff, 256, command);
 
+            if (_tcscmp(command, _T(":sair")) != 0 && _tcscmp(command, _T(":jogs")) != 0 && _tcscmp(command,_T(":pont")) !=0){
+				_tprintf(_T("Comando inválido\n"));
+                continue;
+			}
+
             _tprintf(_T("Enviando comando: %s\nUsername %s\n"), cmdMsg.buff,cmdMsg.username);
             if (!WriteFile(hPipe, &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
                 _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
