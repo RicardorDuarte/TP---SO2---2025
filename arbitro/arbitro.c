@@ -407,12 +407,95 @@ DWORD WINAPI comunica(LPVOID tdata) {
 		// Processa comando
 		if (_tcscmp(receivedMsg.buff, _T(":sair")) == 0) {
 			_tprintf(_T("Cliente %s solicitou saída\n"), receivedMsg.username);
+			WaitForSingleObject(cdata->hMutex, INFINITE);
+
+			// Remove o usuário do array
+			for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+				if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
+					// Move os usuários seguintes para preencher o espaço
+					for (int j = i; j < cdata->sharedMem->nusers - 1; j++) {
+						_tcscpy_s(cdata->sharedMem->users[j], 25,
+							cdata->sharedMem->users[j + 1]);
+						cdata->sharedMem->pontuacao[j] = cdata->sharedMem->pontuacao[j + 1];
+					}
+					cdata->sharedMem->nusers--;
+					break;
+				}
+			}
+
+			// Libera o mutex
+			ReleaseMutex(cdata->hMutex);
+
 			break;
 		}
 
+		if (_tcscmp(receivedMsg.buff, _T(":jogs")) == 0) {
+			_tprintf(_T("Cliente %s solicitou a lista de jogadores\n"), receivedMsg.username);
+			WaitForSingleObject(cdata->hMutex, INFINITE);
+
+			// Prepara a resposta
+			_tcscpy_s(responseMsg.username, 26, receivedMsg.username);
+			responseMsg.isUsernameInvalid = FALSE;
+
+			// Constrói a lista de jogadores
+			_stprintf_s(responseMsg.buff, 256, _T("\nJogadores conectados (%d):\n"), cdata->sharedMem->nusers);
+
+			for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+				// Adiciona cada jogador à mensagem (verificando espaço)
+					_tcscat_s(responseMsg.buff, 256, cdata->sharedMem->users[i]);
+					if (i < cdata->sharedMem->nusers - 1)
+						_tcscat_s(responseMsg.buff, 256, _T("-"));
+			}
+			_tcscat_s(responseMsg.buff, 256, _T("\n"));
+
+			// Envia uma única mensagem completa
+			fSuccess = WriteFile(hPipe, &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+			if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
+				_tprintf(_T("Erro ao enviar lista de jogadores (%d)\n"), GetLastError());
+			}
+			else {
+				_tprintf(_T("Lista de jogadores enviada com sucesso\n"));
+			}
+
+			ReleaseMutex(cdata->hMutex);
+			continue;
+		}
+
+		if (_tcscmp(receivedMsg.buff, _T(":pont")) == 0) {
+			_tprintf(_T("Cliente %s solicitou a lista de pontuações\n"), receivedMsg.username);
+			WaitForSingleObject(cdata->hMutex, INFINITE);
+
+			// Prepara a resposta
+			_tcscpy_s(responseMsg.username, 26, receivedMsg.username);
+			responseMsg.isUsernameInvalid = FALSE;
+
+			// Constrói a lista de pontuações
+			_stprintf_s(responseMsg.buff, 256, _T("\nPontuações dos jogadores:\n"));
+			for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+				TCHAR temp[64];
+				_stprintf_s(temp, 64, _T("%s: %d"), cdata->sharedMem->users[i], cdata->sharedMem->pontuacao[i]);
+				_tcscat_s(responseMsg.buff, 256, temp);
+				if (i < cdata->sharedMem->nusers - 1)
+					_tcscat_s(responseMsg.buff, 256, _T(" - "));
+			}
+			_tcscat_s(responseMsg.buff, 256, _T("\n"));
+
+			// Envia a mensagem completa
+			fSuccess = WriteFile(hPipe, &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+			if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
+				_tprintf(_T("Erro ao enviar lista de pontuações (%d)\n"), GetLastError());
+			}
+			else {
+				_tprintf(_T("Lista de pontuações enviada com sucesso\n"));
+			}
+
+			ReleaseMutex(cdata->hMutex);
+			continue;
+		}
+
+
 		// Prepara resposta
 		_tcscpy_s(responseMsg.username, 26, receivedMsg.username);
-		_stprintf_s(responseMsg.buff, 256, _T("%s"), receivedMsg.buff);
 		responseMsg.isUsernameInvalid = FALSE;
 
 		// Envia resposta
