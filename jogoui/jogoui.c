@@ -16,7 +16,7 @@
 
 
 typedef struct _BufferCell {
-	TCHAR  letra; // valor que o produtor gerou
+    TCHAR  letra; // valor que o produtor gerou
 } BufferCell;
 
 typedef struct _SharedMem {
@@ -30,122 +30,121 @@ typedef struct _SharedMem {
 } SharedMem;
 
 typedef struct _ControlData {
-	unsigned int shutdown;  // flag "continua". 0 = continua, 1 = deve terminar 
-	HANDLE hMapFile;        // ficheiro de memoria 
-	SharedMem* sharedMem;   // memoria partilhada
-	HANDLE hMutex;          // mutex 
-	HANDLE hEvent;          // evento para leitura sincronizada
-	HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
-	unsigned int nPipes; // maximo de pipes
-	TCHAR username[26];         // Novo campo para guardar username do cliente
-	TCHAR lastCommand[256];     // Último comando lido
-	HANDLE hSendEvent; // evento para sinalizar que o produtor pode enviar dados
-
+    unsigned int shutdown;  // flag "continua". 0 = continua, 1 = deve terminar 
+    HANDLE hMapFile;        // ficheiro de memoria 
+    SharedMem* sharedMem;   // memoria partilhada
+    HANDLE hMutex;          // mutex 
+    HANDLE hEvent;          // evento para leitura sincronizada
+    HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
+    unsigned int nPipes; // maximo de pipes
+    TCHAR username[26];         // Novo campo para guardar username do cliente
+    TCHAR lastCommand[256];     // Último comando lido
+    HANDLE hSendEvent; // evento para sinalizar que o produtor pode enviar dados
 } ControlData;
 
 typedef struct _PipeMsg {
-	HANDLE hPipe; //necessario?
-	TCHAR buff[256];
-	BOOL isUsernameInvalid;
-	TCHAR username[26];
+    HANDLE hPipe; //necessario?
+    TCHAR buff[256];
+    BOOL isUsernameInvalid;
+    TCHAR username[26];
 } PipeMsg;
 
 BOOL initMemAndSync(ControlData* cdata)
 {
-	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//se correr bem ja existe, se não, cria depois
-	if (cdata->hMapFile == NULL) {//se for null cria
-		cdata->hMapFile = CreateFileMapping(
-			INVALID_HANDLE_VALUE, //nao ha ficheiro para interligar, nao colocamos nada
-			NULL, // atributo seguranca default
-			PAGE_READWRITE,//permissoes
-			0,//tamanho inicial
-			sizeof(SharedMem), // tamanho
-			SHM_NAME);
-	}
-	if (cdata->hMapFile == NULL)
-	{
-		_tprintf(TEXT("Error: CreateFileMapping (%d)\n"), GetLastError());
-		return FALSE;
-	}
+    cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//se correr bem ja existe, se não, cria depois
+    if (cdata->hMapFile == NULL) {//se for null cria
+        cdata->hMapFile = CreateFileMapping(
+            INVALID_HANDLE_VALUE, //nao ha ficheiro para interligar, nao colocamos nada
+            NULL, // atributo seguranca default
+            PAGE_READWRITE,//permissoes
+            0,//tamanho inicial
+            sizeof(SharedMem), // tamanho
+            SHM_NAME);
+    }
+    if (cdata->hMapFile == NULL)
+    {
+        _tprintf(TEXT("Error: CreateFileMapping (%d)\n"), GetLastError());
+        return FALSE;
+    }
 
 
-	cdata->sharedMem = (SharedMem*)MapViewOfFile(cdata->hMapFile,//mapeia a memoria
-		FILE_MAP_ALL_ACCESS, //permissoes / tipo de acesso
-		0,//0 if < 4GB
-		0,//de onde começamos a mapear
-		sizeof(SharedMem)); //tamanho max
+    cdata->sharedMem = (SharedMem*)MapViewOfFile(cdata->hMapFile,//mapeia a memoria
+        FILE_MAP_ALL_ACCESS, //permissoes / tipo de acesso
+        0,//0 if < 4GB
+        0,//de onde começamos a mapear
+        sizeof(SharedMem)); //tamanho max
 
-	if (cdata->sharedMem == NULL) {
-		_tprintf(TEXT("Erro MapViewOf file %d"), GetLastError());
-		CloseHandle(cdata->hMapFile);
-		return FALSE;
-	}
+    if (cdata->sharedMem == NULL) {
+        _tprintf(TEXT("Erro MapViewOf file %d"), GetLastError());
+        CloseHandle(cdata->hMapFile);
+        return FALSE;
+    }
 
-	cdata->hMutex = CreateMutex(NULL,//seg
-		FALSE,
-		MUTEX_NAME);
+    cdata->hMutex = CreateMutex(NULL,//seg
+        FALSE,
+        MUTEX_NAME);
 
-	if (cdata->hMutex == NULL) {
-		_tprintf(TEXT("ERRO: %d"), GetLastError());
-		UnmapViewOfFile(cdata->sharedMem);
-		CloseHandle(cdata->hMapFile);
-		return FALSE;
-	}
+    if (cdata->hMutex == NULL) {
+        _tprintf(TEXT("ERRO: %d"), GetLastError());
+        UnmapViewOfFile(cdata->sharedMem);
+        CloseHandle(cdata->hMapFile);
+        return FALSE;
+    }
 
-	return TRUE;
+    return TRUE;
 }
 
 
-DWORD WINAPI consume(LPVOID p)
+DWORD WINAPI lerMemPart(LPVOID p)
 {
-	ControlData* cdata = (ControlData*)p;
-	BufferCell cell;
-	int ranTime;
+    ControlData* cdata = (ControlData*)p;
+    BufferCell cell;
+    int ranTime;
 
-	while (cdata->shutdown==0) {
+    while (cdata->shutdown == 0) {
 
-		if (cdata->shutdown == 1) {
-			_tprintf(TEXT("vou fechar mem partilhada!\n"));
-			return 0;
-		}
+        if (cdata->shutdown == 1) {
+            _tprintf(TEXT("vou fechar mem partilhada!\n"));
+            return 0;
+        }
 
-		//espera que haja algo para ler
-		DWORD waitLetter = WaitForSingleObject(cdata->hEvent, 15000);
+        //espera que haja algo para ler
+        DWORD waitLetter = WaitForSingleObject(cdata->hEvent, 15000);
 
-		if (waitLetter == WAIT_TIMEOUT) {
-			_tprintf(TEXT("Timeout a espera por evento\n"));
-			continue;
-		}
+        if (waitLetter == WAIT_TIMEOUT) {
+            _tprintf(TEXT("Timeout a espera por evento\n"));
+            continue;
+        }
 
-		_tprintf(TEXT("\nARRAY:\n"));
-		for (int i = 0; i < BUFFER_SIZE; i++) {
-			WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria
-			_tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
-			ReleaseMutex(cdata->hMutex);//fim zona critica
+        _tprintf(TEXT("\nARRAY:\n"));
+        for (int i = 0; i < BUFFER_SIZE; i++) {
+            WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria
+            _tprintf(TEXT("%c\t"), cdata->sharedMem->buffer[i].letra);
+            ReleaseMutex(cdata->hMutex);//fim zona critica
 
-		}
-		_tprintf(TEXT("\n"));
+        }
+        _tprintf(TEXT("\n"));
 
-		//CopyMemory(&cell, &(cdata->sharedMem->buffer[(cdata->sharedMem->rP)++]), sizeof(BufferCell)); //recebo da memoria partilhada o nr
-		//qnd quisermos retirar da memória partilhada usar codigo a cima
+        //CopyMemory(&cell, &(cdata->sharedMem->buffer[(cdata->sharedMem->rP)++]), sizeof(BufferCell)); //recebo da memoria partilhada o nr
+        //qnd quisermos retirar da memória partilhada usar codigo a cima
 
-		if (cdata->sharedMem->rP == BUFFER_SIZE) {
-			WaitForSingleObject(cdata->hMutex, INFINITE);
-			cdata->sharedMem->rP = 0;//volta a ler do principio, caso chegue ao limite
-			ReleaseMutex(cdata->hMutex);//fim zona critica
-		}
+        if (cdata->sharedMem->rP == BUFFER_SIZE) {
+            WaitForSingleObject(cdata->hMutex, INFINITE);
+            cdata->sharedMem->rP = 0;//volta a ler do principio, caso chegue ao limite
+            ReleaseMutex(cdata->hMutex);//fim zona critica
+        }
 
-		WaitForSingleObject(cdata->hMutex, INFINITE);
-		ReleaseMutex(cdata->hMutex);//fim zona critica
-	}
-	return 0;
+        WaitForSingleObject(cdata->hMutex, INFINITE);
+        ReleaseMutex(cdata->hMutex);//fim zona critica
+    }
+    return 0;
 }
 DWORD WINAPI recebePipe(LPVOID param) {
     ControlData* cdata = (ControlData*)param;
     PipeMsg response;
     DWORD bytesRead;
 
-    while (cdata->shutdown==0) {
+    while (cdata->shutdown == 0) {
         if (cdata->shutdown) {
             return 0;
         }
@@ -167,8 +166,8 @@ DWORD WINAPI recebePipe(LPVOID param) {
             DWORD err = GetLastError();
             if (err == ERROR_BROKEN_PIPE) {
                 _tprintf(_T("Servidor desconectou\n"));
-				cdata->shutdown = 1;
-				return 0;
+                cdata->shutdown = 1;
+                return 0;
             }
             else {
                 _tprintf(_T("Erro ao ler resposta (%d)\n"), err);
@@ -179,9 +178,58 @@ DWORD WINAPI recebePipe(LPVOID param) {
     return 0;
 }
 
+DWORD WINAPI comunica(LPVOID param) {
+    ControlData* cdata = (ControlData*)param;
+    TCHAR command[256]; //tem de ser 256 ou aprte-se tudo, ADORO UNICODE :DDDDDDDDDD
+    PipeMsg msg;
+    DWORD bytesWritten;
+
+    _tprintf(TEXT("Para comandos digite :(comando)\nPara jogar introduza a palavra\n"));
+    _tcscpy_s(msg.username, 26, cdata->username);  // Copia o username
+
+    while (cdata->shutdown == 0) {
+        _getts_s(command, 100);
+        if (command[0] == _T(':')) {
+            PipeMsg cmdMsg;
+            ZeroMemory(&cmdMsg, sizeof(PipeMsg));
+            _tcscpy_s(cmdMsg.username, 26, cdata->username);
+            _tcscpy_s(cmdMsg.buff, 256, command);
+
+            if (_tcscmp(command, _T(":sair")) != 0 && _tcscmp(command, _T(":jogs")) != 0 && _tcscmp(command, _T(":pont")) != 0) {
+                _tprintf(_T("Comando inválido\n"));
+                continue;
+            }
+
+
+            _tprintf(_T("Enviando comando: %s\nUsername %s\n"), cmdMsg.buff, cmdMsg.username);
+            if (!WriteFile(cdata->hPipe[0], &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+                _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
+                break;
+            }
+            if (_tcscmp(command, TEXT(":sair")) == 0) {
+                break;
+            }
+        }
+        else {
+			// Envia a palavra jogada
+			ZeroMemory(&msg, sizeof(PipeMsg));
+			_tcscpy_s(msg.username, 26, cdata->username);
+			_tcscpy_s(msg.buff, 256, command);
+			_tprintf(_T("Enviando palavra: %s\n"), msg.buff);
+			if (!WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+				_tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
+				break;
+			}
+        }
+    }
+    return 0;
+}
+
+
+
 int _tmain(int argc, TCHAR* argv[]) {
     ControlData cdata;
-    HANDLE hThread, hPipe;
+    HANDLE hThread, hPipe, hEvent;
     TCHAR command[100];
     LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
 
@@ -274,39 +322,39 @@ int _tmain(int argc, TCHAR* argv[]) {
         CloseHandle(hReceiveThread);
         exit(-1);
     }
+    HANDLE hComunicaThread = CreateThread(NULL, 0, comunica, &cdata, 0, NULL);
+    if (hComunicaThread == NULL) {
+        _tprintf(_T("Erro ao criar thread de comunicação\n"));
+        CloseHandle(hPipe);
+        CloseHandle(hReceiveThread);
+        exit(-1);
+    }
 
-    _tprintf(TEXT("Para comandos digite :(comando)\nPara jogar introduza a palavra\n"));
+    hEvent = OpenEvent(EVENT_ALL_ACCESS, FALSE, EVENT_NAME);
+    if (hEvent == NULL) {
+        _tprintf_s(_T("Erro ao abrir evento: %ld\n"), GetLastError());
+        exit(-1);
+    }
+    cdata.hEvent = hEvent;
 
-    // Loop principal para enviar comandos
-    do {
-        _getts_s(command, 100);
-		if (command[0] == _T(':')) {
-            PipeMsg cmdMsg;
-            ZeroMemory(&cmdMsg, sizeof(PipeMsg));
-            _tcscpy_s(cmdMsg.username, 26, cdata.username);
-            _tcscpy_s(cmdMsg.buff, 256, command);
+    hThread = CreateThread(NULL, 0, lerMemPart, &cdata, 0, NULL);
+	if (hThread == NULL) {
+		_tprintf(TEXT("Erro ao criar thread de leitura da memória partilhada (%d)\n"), GetLastError());
+		CloseHandle(hPipe);
+		CloseHandle(hReceiveThread);
+		exit(-1);
+	}
 
-            if (_tcscmp(command, _T(":sair")) != 0 && _tcscmp(command, _T(":jogs")) != 0 && _tcscmp(command,_T(":pont")) !=0){
-				_tprintf(_T("Comando inválido\n"));
-                continue;
-			}
+    WaitForSingleObject(hComunicaThread, INFINITE);
+    WaitForSingleObject(hReceiveThread, 2000);
+   
 
-            _tprintf(_T("Enviando comando: %s\nUsername %s\n"), cmdMsg.buff,cmdMsg.username);
-            if (!WriteFile(hPipe, &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
-                _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
-                break;
-            }
-
-		}   
-
-        if (_tcscmp(command, TEXT(":sair")) == 0) {
-            break;
-        }
-    } while (cdata.shutdown==0);
 
     // Limpeza
     cdata.shutdown = 1;
-    WaitForSingleObject(hReceiveThread, 2000);
+	CloseHandle(cdata.hEvent);
+	CloseHandle(hThread);
+	CloseHandle(hComunicaThread);
     _tprintf(_T("Vou encerrar!!\n"));
     CloseHandle(hReceiveThread);
     CloseHandle(hPipe);
