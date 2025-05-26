@@ -332,41 +332,59 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	}
 
 	if (_tcscmp(cmdPrincipal, _T("excluir")) == 0) {
-
+		unsigned int found = 0;
+		TCHAR aEncerrar = "";
 		for (n = 0; n < cdata->sharedMem->nusers; n++) {
-			if (_tcscmp(cmdSec, cdata->sharedMem->users[n]) == 0)
+			if (_tcscmp(cmdSec, cdata->sharedMem->users[n]) == 0) {
+				found = 1;
 				break;
+			}
+
 		}
 		//enviar uma mensagem a dizer para ele fechar
+		if(found == 0) {
+			_tprintf(_T("Utilizador %s não encontrado\n"), cmdSec);
+			return;
+		}
+		else {
+			if (n < cdata->sharedMem->nusers) {
 
-		if (n < cdata->sharedMem->nusers) {
-			_tcscpy_s(msg.username, 26, cdata->sharedMem->users[n]);
-			_tcscpy_s(msg.buff, 256, _T("close")); // comando especial para o cliente sair
-			msg.isUsernameInvalid = FALSE;
+				
+				_tcscpy_s(msg.username, 26, cdata->sharedMem->users[n]);
+				_tcscpy_s(msg.buff, 256, _T("close")); // comando especial para o cliente sair
+				msg.isUsernameInvalid = FALSE;
+				WaitForSingleObject(cdata->hMutex, INFINITE);
+				WriteFile(cdata->hPipe[n], &msg, sizeof(PipeMsg), &bytesWritten, NULL);
+				ReleaseMutex(cdata->hMutex);
 
-			WriteFile(cdata->hPipe[n], &msg, sizeof(PipeMsg), &bytesWritten, NULL);
+				for (n = 0; n < cdata->sharedMem->nusers; n++) {
+					_tcscpy_s(msg.username, 26, cdata->sharedMem->users[n]);
+					_stprintf_s(msg.buff, 256, _T("utilizador %s foi encerrado\n"), cmdSec);
+					msg.isUsernameInvalid = FALSE;
+					WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL);
+				}
 
-			// Fecha o pipe
-			CloseHandle(cdata->hPipe[n]);
+				// Fecha o pipe
+				CloseHandle(cdata->hPipe[n]);
 
-			// remova o utilizador do array e ajuste nusers
-			for (int i = n; i < cdata->sharedMem->nusers - 1; i++) {
-				_tcscpy_s(cdata->sharedMem->users[i], 26, cdata->sharedMem->users[i + 1]);
-				cdata->hPipe[i] = cdata->hPipe[i + 1];
-				cdata->sharedMem->pontuacao[i] = cdata->sharedMem->pontuacao[i + 1];
+				// remova o utilizador do array e ajuste nusers
+				for (int i = n; i < cdata->sharedMem->nusers - 1; i++) {
+					WaitForSingleObject(cdata->hMutex, INFINITE);
+					_tcscpy_s(cdata->sharedMem->users[i], 26, cdata->sharedMem->users[i + 1]);
+					cdata->hPipe[i] = cdata->hPipe[i + 1];
+					cdata->sharedMem->pontuacao[i] = cdata->sharedMem->pontuacao[i + 1];
+					ReleaseMutex(cdata->hMutex);
+				}
+				WaitForSingleObject(cdata->hMutex, INFINITE);
+				cdata->sharedMem->nusers--;
+				cdata->nPipes--;
+				ReleaseMutex(cdata->hMutex);
 			}
-			cdata->sharedMem->nusers--;
-			cdata->nPipes--;
+
+			return;
 		}
 
-		for (n = 0; n < cdata->sharedMem->nusers; n++) {
-			_tcscpy_s(msg.username, 26, cdata->sharedMem->users[n]);
-			_stprintf_s(msg.buff, 256, _T("utilizador %s foi encerrado\n"), cmdSec);
-			msg.isUsernameInvalid = FALSE;
-			WriteFile(cdata->hPipe[n], &msg, sizeof(PipeMsg), &bytesWritten, NULL);
-		}
-
-		return;
+		
 	}
 
 
@@ -377,7 +395,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 
 DWORD WINAPI comunica(LPVOID tdata) {
 	ControlData* cdata = (ControlData*)tdata;
-	HANDLE hPipe = cdata->hPipe[cdata->nPipes - 1]; //isto pode ser passado na chamada da thread pqq ta assim???
+	HANDLE hPipe = cdata->hPipe[cdata->nPipes - 1]; 
 	PipeMsg receivedMsg;
 	PipeMsg responseMsg;
 	DWORD bytesRead, bytesWritten;
@@ -402,12 +420,14 @@ DWORD WINAPI comunica(LPVOID tdata) {
 				_tprintf(_T("Cliente %s desconectou\n"), receivedMsg.username);
 			}
 			else {
+				if (err == ERROR_INVALID_PARAMETER) {
+					continue;
+				}
 				_tprintf(_T("Erro ao ler mensagem (%d)\n"), err);
 			}
 			break;
 		}
 
-		_tprintf(_T("%c\n"),receivedMsg.buff[0]);
 		if (receivedMsg.buff[0] == _T(':')) {
 			// Processa comando
 			
