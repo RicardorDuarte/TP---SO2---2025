@@ -193,7 +193,9 @@ BOOL initMemAndSync(ControlData* cdata)
 DWORD WINAPI enviaLetras(LPVOID p) {
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
-	static TCHAR letras[] = _T("abcdefghijklmnopqrstuvwxyz");
+	static TCHAR letras[] = _T("maepijo");
+	srand((unsigned int)time(NULL));  // Inicializa o gerador com o tempo atual
+	unsigned int posVazia = -1;
 
 	while (!cdata->shutdown) {
 		if (cdata->shutdown)
@@ -202,22 +204,32 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		SetEvent(cdata->hEvent); // sinaliza que o consumidor pode ler
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
-		unsigned indice = rand() % 25;
+		unsigned indice = rand() % 7;
 		cell.letra = letras[indice];
 
-		int pos = cdata->sharedMem->wP;
+		// 1. Verifica se há espaço vazio ('_') no buffer
+		posVazia = -1;
+		for (int i = 0; i < BUFFER_SIZE; i++) {
+			if (cdata->sharedMem->buffer[i].letra == '_') {
+				posVazia = i;
+				break;
+			}
+		}
 
-
-		CopyMemory(&(cdata->sharedMem->buffer[(cdata->sharedMem->wP)++]), &cell, sizeof(BufferCell));
-		if (cdata->sharedMem->wP == BUFFER_SIZE)
-			cdata->sharedMem->wP = 0;//volta a escrever do principio, caso chegue ao limite
+		// 2. Se há espaço vazio, escreve nele
+		if (posVazia != -1) {
+			CopyMemory(&(cdata->sharedMem->buffer[posVazia]), &cell, sizeof(BufferCell));
+		}
+		else {
+			// 3. Se não há espaço vazio, escreve na próxima posição (circular)
+			CopyMemory(&(cdata->sharedMem->buffer[cdata->sharedMem->wP]), &cell, sizeof(BufferCell));
+			cdata->sharedMem->wP = (cdata->sharedMem->wP + 1) % BUFFER_SIZE;
+		}
 
 		ReleaseMutex(cdata->hMutex);//fim zona critica
-
 		ResetEvent(cdata->hEvent); // reseta o evento para que o consumidor possa ler
 
-
-		// lançar as letras no ritmo certo:
+		// Ritmo de escrita
 		LONG result;
 		HKEY hKey;
 		DWORD size = sizeof(DWORD);
@@ -240,7 +252,6 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		WaitForSingleObject(cdata->hMutex, INFINITE);
 		(cdata->sharedMem->nusers)++;
 		ReleaseMutex(cdata->hMutex);
-
 	}
 	return 0;
 }
@@ -342,14 +353,14 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 
 		}
 		//enviar uma mensagem a dizer para ele fechar
-		if(found == 0) {
+		if (found == 0) {
 			_tprintf(_T("Utilizador %s não encontrado\n"), cmdSec);
 			return;
 		}
 		else {
 			if (n < cdata->sharedMem->nusers) {
 
-				
+
 				_tcscpy_s(msg.username, 26, cdata->sharedMem->users[n]);
 				_tcscpy_s(msg.buff, 256, _T("close")); // comando especial para o cliente sair
 				msg.isUsernameInvalid = FALSE;
@@ -384,7 +395,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 			return;
 		}
 
-		
+
 	}
 
 
@@ -395,7 +406,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 
 DWORD WINAPI comunica(LPVOID tdata) {
 	ControlData* cdata = (ControlData*)tdata;
-	HANDLE hPipe = cdata->hPipe[cdata->nPipes - 1]; 
+	HANDLE hPipe = cdata->hPipe[cdata->nPipes - 1];
 	PipeMsg receivedMsg;
 	PipeMsg responseMsg;
 	DWORD bytesRead, bytesWritten;
@@ -428,9 +439,11 @@ DWORD WINAPI comunica(LPVOID tdata) {
 			break;
 		}
 
+		
+
 		if (receivedMsg.buff[0] == _T(':')) {
 			// Processa comando
-			
+
 			if (_tcscmp(receivedMsg.buff, _T(":sair")) == 0) {
 				_tprintf(_T("Cliente %s solicitou saída\n"), receivedMsg.username);
 				WaitForSingleObject(cdata->hMutex, INFINITE);
@@ -519,30 +532,37 @@ DWORD WINAPI comunica(LPVOID tdata) {
 				continue;
 			}
 		}
-		else{
-			BOOL palavraValida = TRUE;
+		else {
+			BOOL palavraValida = FALSE;
 			size_t len = _tcslen(receivedMsg.buff);
 
-			// Verifica cada letra da palavra
-			for (size_t i = 0; i < len; i++) {
-				TCHAR letra = _totlower(receivedMsg.buff[i]); // Converte para minúscula
-				BOOL letraEncontrada = FALSE;
+			if (_tcscmp(receivedMsg.buff, _T("pai")) == 0 || _tcscmp(receivedMsg.buff, _T("mae")) == 0 || _tcscmp(receivedMsg.buff, _T("joao")) == 0) {
+				_tprintf(_T("Cliente %s enviou palavra: %s\nVerificar se e valida\n"), receivedMsg.username, receivedMsg.buff);
 
-				// Verifica se a letra está no buffer circular
-				for (int j = 0; j < BUFFER_SIZE; j++) {
-					if (_totlower(cdata->sharedMem->buffer[j].letra) == letra) {
-						letraEncontrada = TRUE;
-						break;
+				// Verifica cada letra da palavra
+				palavraValida = TRUE; // Assume que é válida inicialmente
+
+				for (size_t i = 0; i < len; i++) {
+					TCHAR letra = _totlower(receivedMsg.buff[i]); // Converte para minúscula
+					BOOL encontrouLetra = FALSE;
+
+					WaitForSingleObject(cdata->hMutex, INFINITE); // Acesso à memória partilhada
+					// Verifica se a letra está no buffer circular
+					for (int j = 0; j < BUFFER_SIZE; j++) {
+						if (_totlower(cdata->sharedMem->buffer[j].letra) == letra) {
+							encontrouLetra = TRUE;
+							cdata->sharedMem->buffer[j].letra = _T('_'); // Remove a letra do buffer
+							break;
+						}
+					}
+					ReleaseMutex(cdata->hMutex);
+
+					if (!encontrouLetra) {
+						palavraValida = FALSE;
+						break; // Se uma letra não for encontrada, a palavra é inválida
 					}
 				}
-
-				if (!letraEncontrada) {
-					palavraValida = FALSE;
-					break;
-				}
 			}
-
-			ReleaseMutex(cdata->hMutex);
 
 			// prepara resposta
 			_tcscpy_s(responseMsg.username, 26, _T("ARBITRO"));
@@ -554,15 +574,14 @@ DWORD WINAPI comunica(LPVOID tdata) {
 				WaitForSingleObject(cdata->hMutex, INFINITE);
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
 					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
-						cdata->sharedMem->pontuacao[i] += len; // Pontuação = número de letras
+						cdata->sharedMem->pontuacao[i] ++; // Pontuação = número de letras
 						break;
 					}
 				}
 				ReleaseMutex(cdata->hMutex);
 				_stprintf_s(responseMsg.buff, 256,
-					_T("Palavra válida! +%d pontos!"), len);
+					_T("Palavra válida! +1 ponto!\n"));
 			}
-
 
 		}
 
@@ -616,7 +635,7 @@ DWORD WINAPI keyboardThread(LPVOID p) {
 
 	do {
 		if (_getts_s(command, 100) == NULL) {
-			
+
 			break;
 		}
 
@@ -681,6 +700,17 @@ int _tmain(int argc, TCHAR* argv[])
 		_tprintf(TEXT("%c\t"), cdata.sharedMem->buffer[i].letra);
 	}
 	_tprintf(TEXT("\n"));
+
+	
+	hThread = CreateThread(NULL, 0, enviaLetras, &cdata, 0, NULL);
+
+	if (hThread == NULL) {
+		_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
+		saidaordeira(&cdata, hThread, hSingle_instance);
+		return 1;
+	}
+
+	
 
 
 	hThrTeclado = CreateThread(NULL, 0, keyboardThread, &cdata, 0, NULL);
