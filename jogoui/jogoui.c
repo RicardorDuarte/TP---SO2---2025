@@ -212,15 +212,15 @@ DWORD WINAPI comunica(LPVOID param) {
             }
         }
         else {
-			// Envia a palavra jogada
-			ZeroMemory(&msg, sizeof(PipeMsg));
-			_tcscpy_s(msg.username, 26, cdata->username);
-			_tcscpy_s(msg.buff, 256, command);
-			_tprintf(_T("Enviando palavra: %s\n"), msg.buff);
-			if (!WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
-				_tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
-				break;
-			}
+            // Envia a palavra jogada
+            ZeroMemory(&msg, sizeof(PipeMsg));
+            _tcscpy_s(msg.username, 26, cdata->username);
+            _tcscpy_s(msg.buff, 256, command);
+            _tprintf(_T("Enviando palavra: %s\n"), msg.buff);
+            if (!WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+                _tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
+                break;
+            }
         }
     }
     return 0;
@@ -339,23 +339,23 @@ int _tmain(int argc, TCHAR* argv[]) {
     cdata.hEvent = hEvent;
 
     hThread = CreateThread(NULL, 0, lerMemPart, &cdata, 0, NULL);
-	if (hThread == NULL) {
-		_tprintf(TEXT("Erro ao criar thread de leitura da memória partilhada (%d)\n"), GetLastError());
-		CloseHandle(hPipe);
-		CloseHandle(hReceiveThread);
-		exit(-1);
-	}
+    if (hThread == NULL) {
+        _tprintf(TEXT("Erro ao criar thread de leitura da memória partilhada (%d)\n"), GetLastError());
+        CloseHandle(hPipe);
+        CloseHandle(hReceiveThread);
+        exit(-1);
+    }
 
     WaitForSingleObject(hComunicaThread, INFINITE);
     WaitForSingleObject(hReceiveThread, 2000);
-   
+
 
 
     // Limpeza
     cdata.shutdown = 1;
-	CloseHandle(cdata.hEvent);
-	CloseHandle(hThread);
-	CloseHandle(hComunicaThread);
+    CloseHandle(cdata.hEvent);
+    CloseHandle(hThread);
+    CloseHandle(hComunicaThread);
     _tprintf(_T("Vou encerrar!!\n"));
     CloseHandle(hReceiveThread);
     CloseHandle(hPipe);
