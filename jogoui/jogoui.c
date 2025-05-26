@@ -49,6 +49,7 @@ typedef struct _PipeMsg {
     TCHAR username[26];
 } PipeMsg;
 
+
 BOOL initMemAndSync(ControlData* cdata)
 {
     cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//se correr bem ja existe, se não, cria depois
