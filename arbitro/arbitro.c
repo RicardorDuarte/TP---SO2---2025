@@ -14,7 +14,7 @@
 #define EVENT_NAME TEXT("EVENT")          // nome do evento
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
 #define BUFFER_SIZE 6
-#define NUSERS 10
+#define NUSERS 3
 
 typedef struct _BufferCell {
 	TCHAR  letra; // valor que o produtor gerou
@@ -109,6 +109,7 @@ BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
 
 BOOL initMemAndSync(ControlData* cdata)
 {
+
 	//ir buscar os valores ao registry
 	int maxLetras = 0, ritmo = 0;
 	if (!readOrCreateRegistryValues(&maxLetras, &ritmo)) {
@@ -155,6 +156,9 @@ BOOL initMemAndSync(ControlData* cdata)
 
 	//inicializa
 	if (firstProcess) {
+		cdata->sharedMem->nusers = 0; // Garante que começa em 0
+		memset(cdata->sharedMem->users, 0, sizeof(cdata->sharedMem->users)); // Limpa o array
+		memset(cdata->sharedMem->pontuacao, 0, sizeof(cdata->sharedMem->pontuacao)); // Limpa pontuações
 		cdata->sharedMem->c = 0; //contador de clientes logados
 		cdata->sharedMem->wP = 0; //posicao de 0 a buffersize para escrita
 		cdata->sharedMem->rP = 0; //posicao de 0 a buffersize para leitura
@@ -204,8 +208,10 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		SetEvent(cdata->hEvent); // sinaliza que o consumidor pode ler
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
+		do {
 		unsigned indice = rand() % 7;
 		cell.letra = letras[indice];
+		}while (cell.letra == cdata->sharedMem->buffer[cdata->sharedMem->wP].letra); // Garante que a letra é diferente da última escrita
 
 		// 1. Verifica se há espaço vazio ('_') no buffer
 		posVazia = -1;
@@ -249,9 +255,7 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 
 		Sleep(1000 * val); // espera o tempo definido no registry
 
-		WaitForSingleObject(cdata->hMutex, INFINITE);
-		(cdata->sharedMem->nusers)++;
-		ReleaseMutex(cdata->hMutex);
+
 	}
 	return 0;
 }
@@ -331,6 +335,8 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	}
 
 	if (_tcscmp(cmdPrincipal, _T("listar")) == 0) {
+		_tprintf(_T("Número de usuários: %d\n"), cdata->sharedMem->nusers);
+
 		n = cdata->sharedMem->nusers;
 		if (n == 0) {
 			_tprintf(TEXT("Nenhum user!\n"));
@@ -565,7 +571,6 @@ DWORD WINAPI comunica(LPVOID tdata) {
 			}
 
 			// prepara resposta
-			_tcscpy_s(responseMsg.username, 26, _T("ARBITRO"));
 			_tcscpy_s(responseMsg.buff, 256,
 				palavraValida ? _T("Palavra válida!") : _T("Palavra inválida"));
 
@@ -574,13 +579,23 @@ DWORD WINAPI comunica(LPVOID tdata) {
 				WaitForSingleObject(cdata->hMutex, INFINITE);
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
 					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
-						cdata->sharedMem->pontuacao[i] ++; // Pontuação = número de letras
+						cdata->sharedMem->pontuacao[i] += len;
 						break;
 					}
 				}
 				ReleaseMutex(cdata->hMutex);
-				_stprintf_s(responseMsg.buff, 256,
-					_T("Palavra válida! +1 ponto!\n"));
+				_stprintf_s(responseMsg.buff, 256,_T("Palavra válida! +%d ponto!\n"),len);
+			}
+			else  {
+				WaitForSingleObject(cdata->hMutex, INFINITE);
+				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
+						cdata->sharedMem->pontuacao[i] -= len/2;
+						break;
+					}
+				}
+				ReleaseMutex(cdata->hMutex);
+				_stprintf_s(responseMsg.buff, 256,_T("Palavra invalida! -%d ponto!\n"),len/2);
 			}
 
 		}
@@ -785,25 +800,26 @@ int _tmain(int argc, TCHAR* argv[])
 				_tprintf(_T("Erro ao ler mensagem inicial (%d)\n"), GetLastError());
 				DisconnectNamedPipe(hPipe);
 				CloseHandle(hPipe);
-
+				continue;
 			}
 
 			WaitForSingleObject(cdata.hMutex, INFINITE);
+			int activeUsers = 0;
 
 			usernameExists = FALSE;
 			// Verifica se username já existe
-			_tprintf(_T("Há %d utilizadores registados.\n"), cdata.sharedMem->nusers);
 			for (int i = 0; i < cdata.sharedMem->nusers; i++) {
 				if (_tcscmp(cdata.sharedMem->users[i], pidata.username) == 0) {
 					usernameExists = TRUE;
 					break;
 				}
 			}
+			_tprintf(_T("\n%d\n"), cdata.sharedMem->nusers);
 
 			if (!usernameExists && cdata.sharedMem->nusers < NUSERS) {
 				_tcscpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], 26, pidata.username);
-				(cdata.sharedMem->nusers)++;
-				cdata.sharedMem->pontuacao[cdata.sharedMem->nusers] = 0;
+				cdata.sharedMem->pontuacao[cdata.sharedMem->nusers] = 0; // Define pontuação ANTES de incrementar
+				cdata.sharedMem->nusers++; // Incrementa só depois
 				pidata.isUsernameInvalid = FALSE;
 				_tprintf(_T("Novo user registado: %s\n"), pidata.username);
 			}
@@ -811,6 +827,8 @@ int _tmain(int argc, TCHAR* argv[])
 				pidata.isUsernameInvalid = TRUE;
 				_tprintf(_T("Login recusado para: %s\n"), pidata.username);
 			}
+
+			_tprintf(_T("Há %d utilizadores registados.\n"), cdata.sharedMem->nusers);
 
 			ReleaseMutex(cdata.hMutex);
 
@@ -825,6 +843,7 @@ int _tmain(int argc, TCHAR* argv[])
 
 			// Se inválido, termina aqui
 			if (pidata.isUsernameInvalid) {
+				_tprintf(_T("Erro Username Inválido (%d)\n"), GetLastError());
 				DisconnectNamedPipe(hPipe);
 				CloseHandle(hPipe);
 				continue;
