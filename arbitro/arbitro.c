@@ -14,7 +14,7 @@
 #define EVENT_NAME TEXT("EVENT")          // nome do evento
 #define REG_PATH TEXT("Software\\TrabSO2") // path do registry para ir buscar maxletras e ritmo
 #define BUFFER_SIZE 6
-#define NUSERS 3
+#define NUSERS 20                       // bug com 3 users, adiciona 254 pontos ao primeiro user logado ???
 
 typedef struct _BufferCell {
 	TCHAR  letra; // valor que o produtor gerou
@@ -36,6 +36,7 @@ typedef struct _ControlData {
 	SharedMem* sharedMem;   // memoria partilhada
 	HANDLE hMutex;          // mutex 
 	HANDLE hEvent;          // evento para leitura sincronizada
+	HANDLE hEvSai;          // evento para desbloquear o gets
 	HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
 	unsigned int nPipes; // maximo de letras
 	TCHAR dicionario[3][BUFFER_SIZE + 1]; // dicionario de palavras, maximo 3 palavras
@@ -48,6 +49,9 @@ typedef struct _PipeMsg {
 	TCHAR username[26];
 } PipeMsg;
 
+
+
+unsigned int startgame = 0;
 
 
 BOOL readOrCreateRegistryValues(int* maxLetras, int* ritmo) {
@@ -166,6 +170,10 @@ BOOL initMemAndSync(ControlData* cdata)
 		for (int i = 0; i < BUFFER_SIZE; i++) {
 			cdata->sharedMem->buffer[i].letra = _T('_'); // inserir '_' em espaços em branco
 		}
+		cdata->sharedMem->nusers = 0;
+		for (int i = 0; i < NUSERS; i++) {
+			cdata->sharedMem->pontuacao[i] = 0; // Inicializa todas as posições
+		}
 	}
 
 	//criar o mutex, uma vez que varios processos podem estar aceder ao mesmo espaço de memoria 
@@ -189,7 +197,6 @@ BOOL initMemAndSync(ControlData* cdata)
 	}
 	cdata->hEvent = hEvent;
 
-
 	return TRUE;
 }
 
@@ -205,13 +212,23 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		if (cdata->shutdown)
 			return 0; //flag para terminar
 
+
+		if (cdata->sharedMem->nusers < 2) {
+			_tprintf(_T("Jogadores Insuficientes\n"));
+			Sleep(3000); // Espera antes de tentar novamente
+			continue;
+		}
+
 		SetEvent(cdata->hEvent); // sinaliza que o consumidor pode ler
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
+		
+
+
 		do {
-		unsigned indice = rand() % 7;
-		cell.letra = letras[indice];
-		}while (cell.letra == cdata->sharedMem->buffer[cdata->sharedMem->wP].letra); // Garante que a letra é diferente da última escrita
+			unsigned indice = rand() % 7;
+			cell.letra = letras[indice];
+		} while (cell.letra == cdata->sharedMem->buffer[cdata->sharedMem->wP].letra); // Garante que a letra é diferente da última escrita
 
 		// 1. Verifica se há espaço vazio ('_') no buffer
 		posVazia = -1;
@@ -354,6 +371,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 		for (n = 0; n < cdata->sharedMem->nusers; n++) {
 			if (_tcscmp(cmdSec, cdata->sharedMem->users[n]) == 0) {
 				found = 1;
+				SetEvent(cdata->hEvSai);
 				break;
 			}
 
@@ -445,7 +463,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 			break;
 		}
 
-		
+
 
 		if (receivedMsg.buff[0] == _T(':')) {
 			// Processa comando
@@ -584,18 +602,18 @@ DWORD WINAPI comunica(LPVOID tdata) {
 					}
 				}
 				ReleaseMutex(cdata->hMutex);
-				_stprintf_s(responseMsg.buff, 256,_T("Palavra válida! +%d ponto!\n"),len);
+				_stprintf_s(responseMsg.buff, 256, _T("Palavra válida! +%d ponto!\n"), len);
 			}
-			else  {
+			else {
 				WaitForSingleObject(cdata->hMutex, INFINITE);
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
 					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
-						cdata->sharedMem->pontuacao[i] -= len/2;
+						cdata->sharedMem->pontuacao[i] -= len / 2;
 						break;
 					}
 				}
 				ReleaseMutex(cdata->hMutex);
-				_stprintf_s(responseMsg.buff, 256,_T("Palavra invalida! -%d ponto!\n"),len/2);
+				_stprintf_s(responseMsg.buff, 256, _T("Palavra invalida! -%d ponto!\n"), len / 2);
 			}
 
 		}
@@ -716,16 +734,8 @@ int _tmain(int argc, TCHAR* argv[])
 	}
 	_tprintf(TEXT("\n"));
 
-	
-	hThread = CreateThread(NULL, 0, enviaLetras, &cdata, 0, NULL);
 
-	if (hThread == NULL) {
-		_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
-		saidaordeira(&cdata, hThread, hSingle_instance);
-		return 1;
-	}
 
-	
 
 
 	hThrTeclado = CreateThread(NULL, 0, keyboardThread, &cdata, 0, NULL);
@@ -817,10 +827,12 @@ int _tmain(int argc, TCHAR* argv[])
 			_tprintf(_T("\n%d\n"), cdata.sharedMem->nusers);
 
 			if (!usernameExists && cdata.sharedMem->nusers < NUSERS) {
+				WaitForSingleObject(cdata.hMutex, INFINITE);
 				_tcscpy_s(cdata.sharedMem->users[cdata.sharedMem->nusers], 26, pidata.username);
 				cdata.sharedMem->pontuacao[cdata.sharedMem->nusers] = 0; // Define pontuação ANTES de incrementar
 				cdata.sharedMem->nusers++; // Incrementa só depois
 				pidata.isUsernameInvalid = FALSE;
+				ReleaseMutex(cdata.hMutex);
 				_tprintf(_T("Novo user registado: %s\n"), pidata.username);
 			}
 			else {
@@ -858,6 +870,19 @@ int _tmain(int argc, TCHAR* argv[])
 				return 1;
 			}
 
+			if (startgame == 0 && cdata.sharedMem->nusers >= 2) {
+				_tprintf(_T("Iniciando jogo com %d jogadores...\n"), cdata.sharedMem->nusers);
+				startgame = 1;
+				hThread = CreateThread(NULL, 0, enviaLetras, &cdata, 0, NULL);
+
+				if (hThread == NULL) {
+					_tprintf(TEXT("Error creating thread (%d)\n"), GetLastError());
+					saidaordeira(&cdata, hThread, hSingle_instance);
+					return 1;
+				}
+			}
+
+
 
 			WaitForSingleObject(cdata.hMutex, INFINITE);
 			BOOL shouldExit = (cdata.shutdown == 1);
@@ -868,10 +893,13 @@ int _tmain(int argc, TCHAR* argv[])
 				break;
 			}
 
+
 			Sleep(100); // Pequena pausa para evitar consumo excessivo de CPU
 		}
 
+
 	} while (cdata.shutdown == 0);
+
 	// Cleanup
 	WaitForSingleObject(hThrTeclado, INFINITE);
 	saidaordeira(&cdata, hThread, hSingle_instance);
