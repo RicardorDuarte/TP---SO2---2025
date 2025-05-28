@@ -35,6 +35,7 @@ typedef struct _ControlData {
     SharedMem* sharedMem;   // memoria partilhada
     HANDLE hMutex;          // mutex 
     HANDLE hEvent;          // evento para leitura sincronizada
+	HANDLE hEvSai;          // evento para desbloquear o gets
     HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
     unsigned int nPipes; // maximo de pipes
     TCHAR username[26];         // Novo campo para guardar username do cliente
@@ -92,6 +93,8 @@ BOOL initMemAndSync(ControlData* cdata)
         return FALSE;
     }
 
+    cdata->hEvSai = CreateEvent(NULL, TRUE, FALSE, NULL); // sinalizar para saída
+
     return TRUE;
 }
 
@@ -140,26 +143,22 @@ DWORD WINAPI lerMemPart(LPVOID p)
     }
     return 0;
 }
+
 DWORD WINAPI recebePipe(LPVOID param) {
     ControlData* cdata = (ControlData*)param;
     PipeMsg response;
     DWORD bytesRead;
 
     while (cdata->shutdown == 0) {
-        if (cdata->shutdown) {
-            return 0;
-        }
-
-        // Espera por respostas do servidor
         if (ReadFile(cdata->hPipe[0], &response, sizeof(PipeMsg), &bytesRead, NULL)) {
             if (bytesRead > 0) {
                 _tprintf(_T("Resposta recebida: %s\n"), response.buff);
 
-                // Se for uma mensagem de shutdown
                 if (_tcscmp(response.buff, _T("close")) == 0) {
                     _tprintf(_T("Expulso pelo administrador\n"));
                     cdata->shutdown = 1;
-                    return 0;
+                    SetEvent(cdata->hEvSai); // Sinalizar para sair
+                    break;
                 }
             }
         }
@@ -168,11 +167,10 @@ DWORD WINAPI recebePipe(LPVOID param) {
             if (err == ERROR_BROKEN_PIPE) {
                 _tprintf(_T("Servidor desconectou\n"));
                 cdata->shutdown = 1;
+                SetEvent(cdata->hEvSai); // Sinalizar para sair
                 return 0;
             }
-            else {
-                _tprintf(_T("Erro ao ler resposta (%d)\n"), err);
-            }
+            _tprintf(_T("Erro ao ler resposta (%d)\n"), err);
             return 1;
         }
     }
@@ -181,51 +179,86 @@ DWORD WINAPI recebePipe(LPVOID param) {
 
 DWORD WINAPI comunica(LPVOID param) {
     ControlData* cdata = (ControlData*)param;
-    TCHAR command[256]; //tem de ser 256 ou aprte-se tudo, ADORO UNICODE :DDDDDDDDDD
+    TCHAR command[256];
     PipeMsg msg;
     DWORD bytesWritten;
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    OVERLAPPED ov = { 0 };
+    HANDLE hEvents[2] = { cdata->hEvSai, NULL };
 
     _tprintf(TEXT("Para comandos digite :(comando)\nPara jogar introduza a palavra\n"));
-    _tcscpy_s(msg.username, 26, cdata->username);  // Copia o username
+    _tcscpy_s(msg.username, 26, cdata->username);
+
+    // Criar evento para I/O overlapped
+    ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    hEvents[1] = ov.hEvent;
 
     while (cdata->shutdown == 0) {
-        _getts_s(command, 100);
-        if (command[0] == _T(':')) {
-            PipeMsg cmdMsg;
-            ZeroMemory(&cmdMsg, sizeof(PipeMsg));
-            _tcscpy_s(cmdMsg.username, 26, cdata->username);
-            _tcscpy_s(cmdMsg.buff, 256, command);
+        // Configurar leitura assíncrona
+        if (!ReadFile(hStdin, command, sizeof(command) / sizeof(TCHAR), NULL, &ov)) {
+            if (GetLastError() != ERROR_IO_PENDING) {
+                _tprintf(_T("Erro na leitura do console\n"));
+                break;
+            }
+        }
 
-            if (_tcscmp(command, _T(":sair")) != 0 && _tcscmp(command, _T(":jogs")) != 0 && _tcscmp(command, _T(":pont")) != 0) {
-                _tprintf(_T("Comando inválido\n"));
+        // Esperar por entrada OU evento de saída
+        DWORD waitResult = WaitForMultipleObjects(2, hEvents, FALSE, INFINITE);
+
+        if (waitResult == WAIT_OBJECT_0) { // Evento de saída
+            CancelIo(hStdin);
+            break;
+        }
+        else if (waitResult == WAIT_OBJECT_0 + 1) { // Entrada disponível
+            DWORD bytesRead;
+            if (!GetOverlappedResult(hStdin, &ov, &bytesRead, FALSE)) {
+                _tprintf(_T("Erro ao ler entrada\n"));
                 continue;
             }
 
+            command[bytesRead / sizeof(TCHAR)] = '\0'; // Terminar string
 
-            _tprintf(_T("Enviando comando: %s\nUsername %s\n"), cmdMsg.buff, cmdMsg.username);
-            if (!WriteFile(cdata->hPipe[0], &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
-                _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
-                break;
+            // Processar comando
+            if (command[0] == _T(':')) {
+                PipeMsg cmdMsg;
+                ZeroMemory(&cmdMsg, sizeof(PipeMsg));
+                _tcscpy_s(cmdMsg.username, 26, cdata->username);
+                _tcscpy_s(cmdMsg.buff, 256, command);
+
+                if (_tcscmp(command, _T(":sair")) == 0) {
+                    _tprintf(_T("Enviando comando para sair...\n"));
+                    if (!WriteFile(cdata->hPipe[0], &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+                        _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
+                    }
+                    break;
+                }
+                else if (_tcscmp(command, _T(":jogs")) == 0 || _tcscmp(command, _T(":pont")) == 0) {
+                    _tprintf(_T("Enviando comando: %s\n"), cmdMsg.buff);
+                    if (!WriteFile(cdata->hPipe[0], &cmdMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+                        _tprintf(_T("[ERRO] ao enviar comando! Error: %d\n"), GetLastError());
+                    }
+                }
+                else {
+                    _tprintf(_T("Comando inválido\n"));
+                }
             }
-            if (_tcscmp(command, TEXT(":sair")) == 0) {
-                break;
-            }
-        }
-        else {
-            // Envia a palavra jogada
-            ZeroMemory(&msg, sizeof(PipeMsg));
-            _tcscpy_s(msg.username, 26, cdata->username);
-            _tcscpy_s(msg.buff, 256, command);
-            _tprintf(_T("Enviando palavra: %s\n"), msg.buff);
-            if (!WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
-                _tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
-                break;
+            else {
+                // Envia a palavra jogada
+                ZeroMemory(&msg, sizeof(PipeMsg));
+                _tcscpy_s(msg.username, 26, cdata->username);
+                _tcscpy_s(msg.buff, 256, command);
+                _tprintf(_T("Enviando palavra: %s\n"), msg.buff);
+                if (!WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+                    _tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
+                    break;
+                }
             }
         }
     }
+
+    CloseHandle(ov.hEvent);
     return 0;
 }
-
 
 
 int _tmain(int argc, TCHAR* argv[]) {
