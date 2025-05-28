@@ -204,7 +204,7 @@ BOOL initMemAndSync(ControlData* cdata)
 DWORD WINAPI enviaLetras(LPVOID p) {
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
-	static TCHAR letras[] = _T("maepijo");
+	static TCHAR letras[] = _T("maepicroa");
 	srand((unsigned int)time(NULL));  // Inicializa o gerador com o tempo atual
 	unsigned int posVazia = -1;
 
@@ -222,11 +222,11 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		SetEvent(cdata->hEvent); // sinaliza que o consumidor pode ler
 		WaitForSingleObject(cdata->hMutex, INFINITE);//mexer na memoria, zona critica
 
-		
+
 
 
 		do {
-			unsigned indice = rand() % 7;
+			unsigned indice = rand() % 9;
 			cell.letra = letras[indice];
 		} while (cell.letra == cdata->sharedMem->buffer[cdata->sharedMem->wP].letra); // Garante que a letra é diferente da última escrita
 
@@ -277,7 +277,40 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 	return 0;
 }
 
+BOOL LancaBotComNovaConsola(const TCHAR* nome, const int* valor) {
+	TCHAR cmdLine[256];
+	PROCESS_INFORMATION pi;
+	STARTUPINFO si;
 
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+
+	// Monta a linha de comando
+	_stprintf_s(cmdLine, 256, TEXT("bot.exe %s %d"), nome, valor);
+
+	BOOL result = CreateProcess(
+		NULL,               // Nome do programa (NULL = usa o primeiro token de cmdLine)
+		cmdLine,            // Linha de comando com argumentos
+		NULL,               // Segurança do processo
+		NULL,               // Segurança do thread
+		FALSE,              // Herda handles?
+		CREATE_NEW_CONSOLE, // <-- Cria nova consola
+		NULL,               // Ambiente
+		NULL,               // Diretório atual
+		&si,                // Startup info
+		&pi                 // Process info
+	);
+
+	if (!result) {
+		_tprintf(TEXT("[ERRO] ao lançar bot (%d)\n"), GetLastError());
+		return FALSE;
+	}
+	// Fecha os handles, não precisas manter o processo aberto
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+	return TRUE;
+}
 
 void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	ControlData* cdata = (ControlData*)lpParam;
@@ -287,11 +320,14 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	LONG result;
 	TCHAR cmdPrincipal[256] = { 0 };
 	TCHAR cmdSec[256] = { 0 };
-	unsigned int val, n = 0;
+	unsigned int val, n = 0,velocidade=0;
 	PipeMsg msg = { 0 };
+	srand(time(NULL));
+	unsigned int tempo_reacao;
+	unsigned int ilider = 0;
 
 
-	int args = _stscanf_s(comando, _T("%255s %255s"), cmdPrincipal, 256, cmdSec, 256);
+	int args = _stscanf_s(comando, _T("%255s %255s %255s"), cmdPrincipal, 256, cmdSec, 256);
 
 	if (args > 0) {
 		_tprintf(_T("Comando completo: %s\n"), comando);
@@ -307,11 +343,51 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 		_tprintf(_T("Segundo token: %s\n"), cmdSec);
 	}
 
+
+
 	if (_tcscmp(cmdPrincipal, _T("encerrar")) == 0) {
 		WaitForSingleObject(cdata->hMutex, INFINITE);
 		cdata->shutdown = 1;
-		ReleaseMutex(cdata->hMutex);
 		_tprintf(_T("A terminar...\n"));
+
+		// Find the leader
+		int ilider = 0;
+		for (int i = 1; i < cdata->sharedMem->nusers; i++) {
+			if (cdata->sharedMem->pontuacao[i] > cdata->sharedMem->pontuacao[ilider]) {
+				ilider = i;
+			}
+		}
+
+		// Prepare leader message
+		PipeMsg msg;
+		_tcscpy_s(msg.username, 26, _T("Arbitro"));
+		msg.isUsernameInvalid = FALSE;
+		_stprintf_s(msg.buff, 256, _T("Líder final: %s -> Pontuação: %d"),
+			cdata->sharedMem->users[ilider],
+			cdata->sharedMem->pontuacao[ilider]);
+
+		// Send leader info to all clients
+		for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+			if (cdata->hPipe[i] != INVALID_HANDLE_VALUE) {
+				if (!WriteFile(cdata->hPipe[i], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+					_tprintf(_T("Erro ao enviar líder para %s (%d)\n"),
+						cdata->sharedMem->users[i], GetLastError());
+				}
+			}
+		}
+
+		// Send close command to all clients
+		_tcscpy_s(msg.buff, 256, _T("close"));
+		for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+			if (cdata->hPipe[i] != INVALID_HANDLE_VALUE) {
+				if (!WriteFile(cdata->hPipe[i], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
+					_tprintf(_T("Erro ao enviar close para %s (%d)\n"),
+						cdata->sharedMem->users[i], GetLastError());
+				}
+			}
+		}
+		cdata->shutdown = 1; // Sinaliza que o servidor deve terminar
+		ReleaseMutex(cdata->hMutex);
 		return;
 	}
 
@@ -359,13 +435,26 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 			_tprintf(TEXT("Nenhum user!\n"));
 			return;
 		}
-		_tprintf(_T("Lista de jogadores:\n"));
+		_tprintf(_T("Lista de jogadores -> pontuação:\n"));
 		for (int i = 0; i < cdata->sharedMem->nusers; i++) {
-			_tprintf(_T("%s\n"), cdata->sharedMem->users[i]);
+			_tprintf(_T("%s -> %d\n"), cdata->sharedMem->users[i], cdata->sharedMem->pontuacao[i]);
 		}
 	}
 
-	if (_tcscmp(cmdPrincipal, _T("excluir")) == 0) {
+	else if (_tcscmp(cmdPrincipal, _T("iniciarbot")) == 0) {
+		_tprintf(_T("Comando bot recebido: %s\n"), cmdSec);
+		for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+			if (_tcscmp(cmdSec, cdata->sharedMem->users[i]) == 0) {
+				_tprintf(_T("[ERRO]Nome igual a user, bot não criado\n Indicar outro nome, comando listar, para ver users\n"));
+				return;
+			}
+		}
+		velocidade = 5 + (rand() % 26);
+		_tprintf(_T("Lançando bot com nome: %s e ritmo: %d\n"), cmdSec, velocidade);
+		LancaBotComNovaConsola(cmdSec, velocidade);
+	}
+
+	else if (_tcscmp(cmdPrincipal, _T("excluir")) == 0) {
 		unsigned int found = 0;
 		TCHAR aEncerrar = "";
 		for (n = 0; n < cdata->sharedMem->nusers; n++) {
@@ -383,7 +472,6 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 		}
 		else {
 			if (n < cdata->sharedMem->nusers) {
-
 
 				_tcscpy_s(msg.username, 26, cdata->sharedMem->users[n]);
 				_tcscpy_s(msg.buff, 256, _T("close")); // comando especial para o cliente sair
@@ -436,6 +524,15 @@ DWORD WINAPI comunica(LPVOID tdata) {
 	DWORD bytesRead, bytesWritten;
 	BOOL usernameExists = FALSE;
 	BOOL fSuccess;
+	unsigned int pontos = 0;
+	unsigned int pontoslider = 0;
+	unsigned int ilider=0;
+
+	const TCHAR* palavras[] = {
+	   _T("carro"),
+	   _T("mae"),
+	   _T("pai")
+	};
 
 
 	// Loop principal de comunicação
@@ -557,52 +654,110 @@ DWORD WINAPI comunica(LPVOID tdata) {
 			}
 		}
 		else {
-			BOOL palavraValida = FALSE;
-			size_t len = _tcslen(receivedMsg.buff);
-
-			if (_tcscmp(receivedMsg.buff, _T("pai")) == 0 || _tcscmp(receivedMsg.buff, _T("mae")) == 0 || _tcscmp(receivedMsg.buff, _T("joao")) == 0) {
-				_tprintf(_T("Cliente %s enviou palavra: %s\nVerificar se e valida\n"), receivedMsg.username, receivedMsg.buff);
-
-				// Verifica cada letra da palavra
-				palavraValida = TRUE; // Assume que é válida inicialmente
-
-				for (size_t i = 0; i < len; i++) {
-					TCHAR letra = _totlower(receivedMsg.buff[i]); // Converte para minúscula
-					BOOL encontrouLetra = FALSE;
-
-					WaitForSingleObject(cdata->hMutex, INFINITE); // Acesso à memória partilhada
-					// Verifica se a letra está no buffer circular
-					for (int j = 0; j < BUFFER_SIZE; j++) {
-						if (_totlower(cdata->sharedMem->buffer[j].letra) == letra) {
-							encontrouLetra = TRUE;
-							cdata->sharedMem->buffer[j].letra = _T('_'); // Remove a letra do buffer
-							break;
-						}
-					}
-					ReleaseMutex(cdata->hMutex);
-
-					if (!encontrouLetra) {
-						palavraValida = FALSE;
-						break; // Se uma letra não for encontrada, a palavra é inválida
-					}
+			BOOL palavraReconhecida = FALSE;
+			for (int i = 0; i < sizeof(palavras) / sizeof(palavras[0]); i++) {
+				if (_tcscmp(receivedMsg.buff, palavras[i]) == 0) {
+					palavraReconhecida = TRUE;
+					break;
 				}
 			}
 
-			// prepara resposta
-			_tcscpy_s(responseMsg.buff, 256,
-				palavraValida ? _T("Palavra válida!") : _T("Palavra inválida"));
+			BOOL palavraValida = FALSE;
+			size_t len = _tcslen(receivedMsg.buff);
 
-			// atualiza pontuação se a palavra for válida
+			if (palavraReconhecida) {
+				_tprintf(_T("Cliente %s enviou palavra: %s\nVerificar se e valida\n"), receivedMsg.username, receivedMsg.buff);
+
+				// Primeiro verifica se todas as letras existem (incluindo repetições)
+				palavraValida = TRUE;
+
+				// Cria uma cópia temporária do buffer para verificação
+				TCHAR tempBuffer[BUFFER_SIZE];
+				WaitForSingleObject(cdata->hMutex, INFINITE);
+				for (int j = 0; j < BUFFER_SIZE; j++) {
+					tempBuffer[j] = _totlower(cdata->sharedMem->buffer[j].letra);
+				}
+				ReleaseMutex(cdata->hMutex);
+
+				for (size_t i = 0; i < len; i++) {
+					TCHAR letra = _totlower(receivedMsg.buff[i]);
+					BOOL encontrouLetra = FALSE;
+
+					for (int j = 0; j < BUFFER_SIZE; j++) {
+						if (tempBuffer[j] == letra) {
+							encontrouLetra = TRUE;
+							tempBuffer[j] = _T('_'); // Marca como usada
+							break;
+						}
+					}
+
+					if (!encontrouLetra) {
+						palavraValida = FALSE;
+						break;
+					}
+				}
+
+				// Só remove as letras se a palavra for válida
+				if (palavraValida) {
+					WaitForSingleObject(cdata->hMutex, INFINITE);
+					// Refaz o processo no buffer real
+					for (size_t i = 0; i < len; i++) {
+						TCHAR letra = _totlower(receivedMsg.buff[i]);
+						for (int j = 0; j < BUFFER_SIZE; j++) {
+							if (_totlower(cdata->sharedMem->buffer[j].letra) == letra) {
+								cdata->sharedMem->buffer[j].letra = _T('_');
+								break;
+							}
+						}
+					}
+					ReleaseMutex(cdata->hMutex);
+				}
+			}
+
+			// Prepara resposta para o jogador
 			if (palavraValida) {
 				WaitForSingleObject(cdata->hMutex, INFINITE);
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
 					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
+
 						cdata->sharedMem->pontuacao[i] += len;
+						pontos = cdata->sharedMem->pontuacao[i]; // Guarda a pontuação atualizada
+						
+
 						break;
 					}
 				}
 				ReleaseMutex(cdata->hMutex);
-				_stprintf_s(responseMsg.buff, 256, _T("Palavra válida! +%d ponto!\n"), len);
+				_stprintf_s(responseMsg.buff, 256, _T("Palavra válida! +%d pontos!\n"), len);
+
+				// Notifica todos os outros jogadores
+
+				_tcscpy_s(responseMsg.username, 26, _T("Arbitro"));
+				responseMsg.isUsernameInvalid = FALSE;
+
+
+				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+					if (pontoslider<cdata->sharedMem->pontuacao[i]) {
+						ilider = i;
+					}
+				}
+
+				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) != 0 && pontos > pontoslider && i!=ilider ) {
+						_stprintf_s(responseMsg.buff, 256, _T("O jogador %s acertou a palavra '%s' e ganhou %d pontos e é o lider com %d pontos!\n"),
+							receivedMsg.username, receivedMsg.buff, len, pontos);
+						pontoslider = pontos;
+						WriteFile(cdata->hPipe[i], &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+					}
+					else if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) != 0) {
+						_stprintf_s(responseMsg.buff, 256, _T("O jogador %s acertou a palavra '%s' e ganhou %d pontos!\n"),
+							receivedMsg.username, receivedMsg.buff, len);
+
+						WriteFile(cdata->hPipe[i], &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+					}
+				}
+
+			
 			}
 			else {
 				WaitForSingleObject(cdata->hMutex, INFINITE);
@@ -613,11 +768,9 @@ DWORD WINAPI comunica(LPVOID tdata) {
 					}
 				}
 				ReleaseMutex(cdata->hMutex);
-				_stprintf_s(responseMsg.buff, 256, _T("Palavra invalida! -%d ponto!\n"), len / 2);
+				_stprintf_s(responseMsg.buff, 256, _T("Palavra inválida! -%d pontos!\n"), len / 2);
 			}
-
 		}
-
 
 		// Prepara resposta
 		_tcscpy_s(responseMsg.username, 26, receivedMsg.username);
@@ -633,9 +786,30 @@ DWORD WINAPI comunica(LPVOID tdata) {
 		}
 	}
 
+	// Notifica todos os usuários exceto o que está se desconectando
+	for (int i = 0; i < cdata->sharedMem->nusers; i++) {
+		// Pula o próprio usuário que está se desconectando
+		if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) == 0) {
+			continue;
+		}
 
-	// Fecha conexão
+		// Prepara mensagem de notificação
+		_stprintf_s(responseMsg.buff, 256, _T("O jogador %s saiu do jogo\n"), receivedMsg.username);
+		_tcscpy_s(responseMsg.username, 26, _T("Arbitro"));
+		responseMsg.isUsernameInvalid = FALSE;
 
+		// Envia a notificação
+		BOOL fSuccess = WriteFile(cdata->hPipe[i], &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
+
+		if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
+			//_tprintf(_T("[AVISO] Falha ao notificar %s (Erro: %d)\n"),
+			//	cdata->sharedMem->users[i], GetLastError());
+			// Continua para o próximo usuário mesmo em caso de erro
+		}
+	}
+
+	// Continua a execução normalmente após notificar todos
+	
 	_tprintf(_T("Conexão com %s encerrada\n"), receivedMsg.username);
 	return 0;
 }
@@ -774,7 +948,6 @@ int _tmain(int argc, TCHAR* argv[])
 			OVERLAPPED OverlRd = { 0 };
 			HANDLE ReadReady;
 
-			_tprintf(_T("Cliente conectado\n"));
 			ReadReady = CreateEvent(
 				NULL,   // default security attributes
 				TRUE,   // manual-reset event
@@ -834,6 +1007,35 @@ int _tmain(int argc, TCHAR* argv[])
 				pidata.isUsernameInvalid = FALSE;
 				ReleaseMutex(cdata.hMutex);
 				_tprintf(_T("Novo user registado: %s\n"), pidata.username);
+
+				// Prepara mensagem padrão
+				pidata.isUsernameInvalid = FALSE;
+
+				for (int i = 0; i < cdata.sharedMem->nusers; i++) {
+					// Pula o próprio usuário que acabou de conectar
+					if (_tcscmp(cdata.sharedMem->users[i], pidata.username) == 0) {
+						continue;
+					}
+
+					// Formata mensagem personalizada
+					_stprintf_s(pidata.buff, 256, _T("O jogador %s juntou-se ao jogo!\n"), pidata.username);
+
+					// Envia notificação
+					BOOL success = WriteFile(
+						cdata.hPipe[i],
+						&pidata,
+						sizeof(PipeMsg),
+						&bytesWritten,
+						NULL
+					);
+
+					if (!success || bytesWritten != sizeof(PipeMsg)) {
+						_tprintf(_T("[AVISO] Falha ao notificar %s sobre a nova conexão (Erro: %d)\n"),
+							cdata.sharedMem->users[i], GetLastError());
+					}
+				}
+			
+
 			}
 			else {
 				pidata.isUsernameInvalid = TRUE;
