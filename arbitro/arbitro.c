@@ -1,4 +1,3 @@
-
 #include <windows.h>
 #include <tchar.h>
 #include <fcntl.h>
@@ -8,7 +7,7 @@
 
 
 #define SHM_NAME TEXT("SHM_PC")           // nome da memoria partilhada
-#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex   -> em casa devem pensar numa solução para ter mutex´s distintos de forma a não existir perda de performance 
+#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex  
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define EVENT_NAME TEXT("EVENT")          // nome do evento
@@ -778,8 +777,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 		BOOL fSuccess = WriteFile(cdata->hPipe[i], &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
 
 		if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
-			_tprintf(_T("[AVISO] Falha ao notificar %s (Erro: %d)\n"),
-
+			_tprintf(_T("Erro ao enviar resposta (%d)\n"), GetLastError());
 		}
 	}
 
