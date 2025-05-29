@@ -1,3 +1,4 @@
+
 #include <windows.h>
 #include <tchar.h>
 #include <fcntl.h>
@@ -7,7 +8,7 @@
 
 
 #define SHM_NAME TEXT("SHM_PC")           // nome da memoria partilhada
-#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex  
+#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex   
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define EVENT_NAME TEXT("EVENT")          // nome do evento
@@ -425,7 +426,6 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	}
 
 	else if (_tcscmp(cmdPrincipal, _T("iniciarbot")) == 0) {
-		_tprintf(_T("Comando bot recebido: %s\n"), cmdSec);
 		for (int i = 0; i < cdata->sharedMem->nusers; i++) {
 			if (_tcscmp(cmdSec, cdata->sharedMem->users[i]) == 0) {
 				_tprintf(_T("[ERRO]Nome igual a user, bot não criado\n Indicar outro nome, comando listar, para ver users\n"));
@@ -507,7 +507,6 @@ DWORD WINAPI comunica(LPVOID tdata) {
 	BOOL fSuccess;
 	unsigned int pontos = 0;
 	unsigned int pontoslider = 0;
-	unsigned int ilider = 0;
 
 	const TCHAR* palavras[] = {
 	   _T("carro"),
@@ -711,14 +710,9 @@ DWORD WINAPI comunica(LPVOID tdata) {
 				responseMsg.isUsernameInvalid = FALSE;
 
 
-				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
-					if (pontoslider < cdata->sharedMem->pontuacao[i]) {
-						ilider = i;
-					}
-				}
 
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
-					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) != 0 && pontos > pontoslider && i != ilider) {
+					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) != 0 && pontos > pontoslider ) {
 						_stprintf_s(responseMsg.buff, 256, _T("O jogador %s acertou a palavra '%s' e ganhou %d pontos e é o lider com %d pontos!\n"),
 							receivedMsg.username, receivedMsg.buff, len, pontos);
 						pontoslider = pontos;
