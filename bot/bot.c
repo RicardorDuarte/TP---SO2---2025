@@ -12,7 +12,7 @@
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define EVENT_NAME TEXT("EVENT")          // nome do evento
 #define BUFFER_SIZE 6
-#define NUSERS 10
+#define NUSERS 20
 
 typedef struct _BufferCell {
     TCHAR  letra;
