@@ -16,11 +16,11 @@
 
 
 typedef struct _BufferCell {
-    TCHAR  letra; // valor que o produtor gerou
+    TCHAR  letra; 
 } BufferCell;
 
 typedef struct _SharedMem {
-    unsigned int c;   //    
+    unsigned int c;      
     unsigned int wP;  // posicao do buffer escrita     
     unsigned int rP;  // posicao do buffer leitura
     BufferCell buffer[BUFFER_SIZE]; // buffer circular
@@ -35,16 +35,15 @@ typedef struct _ControlData {
     SharedMem* sharedMem;   // memoria partilhada
     HANDLE hMutex;          // mutex 
     HANDLE hEvent;          // evento para leitura sincronizada
-	HANDLE hEvSai;          // evento para desbloquear o gets
+    HANDLE hEvSai;          // evento para desbloquear o gets
     HANDLE hPipe[NUSERS];   // array de handles para os pipes de cada jogador
     unsigned int nPipes; // maximo de pipes
     TCHAR username[26];         // Novo campo para guardar username do cliente
     TCHAR lastCommand[256];     // Último comando lido
-    HANDLE hSendEvent; // evento para sinalizar que o produtor pode enviar dados
 } ControlData;
 
 typedef struct _PipeMsg {
-    HANDLE hPipe; //necessario?
+    HANDLE hPipe; 
     TCHAR buff[256];
     BOOL isUsernameInvalid;
     TCHAR username[26];
