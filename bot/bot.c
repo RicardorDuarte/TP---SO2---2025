@@ -15,7 +15,7 @@
 #define NUSERS 10
 
 typedef struct _BufferCell {
-    TCHAR  letra; 
+    TCHAR  letra;
 } BufferCell;
 
 typedef struct _SharedMem {
@@ -98,13 +98,11 @@ DWORD WINAPI lerMemPart(LPVOID p) {
 
     while (cdata->shutdown == 0) {
         if (cdata->shutdown == 1) {
-            _tprintf(TEXT("Fechando leitura da memória partilhada!\n"));
             return 0;
         }
 
         DWORD waitLetter = WaitForSingleObject(cdata->hEvent, 15000);
-        if (waitLetter == WAIT_TIMEOUT) {
-            _tprintf(TEXT("Timeout a espera por evento\n"));
+        if (waitLetter == WAIT_TIMEOUT) {//espera letra
             continue;
         }
 
@@ -133,7 +131,6 @@ DWORD WINAPI recebePipe(LPVOID param) {
     while (cdata->shutdown == 0) {
         if (ReadFile(cdata->hPipe[0], &response, sizeof(PipeMsg), &bytesRead, NULL)) {
             if (bytesRead > 0) {
-                _tprintf(_T("Resposta recebida: %s\n"), response.buff);
 
                 if (_tcscmp(response.buff, _T("close")) == 0) {
                     _tprintf(_T("Expulso pelo administrador\n"));
@@ -181,7 +178,6 @@ DWORD WINAPI enviaPalavras(LPVOID param) {
         int idx = rand() % numPalavras;
         _tcscpy_s(msg.buff, 256, palavras[idx]);
 
-        _tprintf(_T("Enviando palavra: %s\n"), msg.buff);
         if (!WriteFile(bdata->cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL)) {
             _tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
             break;
@@ -253,14 +249,12 @@ int _tmain(int argc, TCHAR* argv[]) {
     _tcscpy_s(loginMsg.username, 26, cdata.username);
     _tcscpy_s(loginMsg.buff, 256, _T("login"));
 
-    _tprintf(_T("Enviando login...\n"));
     if (!WriteFile(hPipe, &loginMsg, sizeof(PipeMsg), &bytesWritten, NULL)) {
         _tprintf(_T("[ERRO] ao enviar login! Error: %d\n"), GetLastError());
         CloseHandle(hPipe);
         return -1;
     }
 
-    _tprintf(_T("Aguardando resposta de login...\n"));
     if (!ReadFile(hPipe, &loginResponse, sizeof(PipeMsg), &bytesRead, NULL)) {
         _tprintf(_T("[ERRO] ao ler resposta de login! Error: %d\n"), GetLastError());
         CloseHandle(hPipe);
@@ -273,7 +267,7 @@ int _tmain(int argc, TCHAR* argv[]) {
         return -1;
     }
 
-    _tprintf(_T("Login bem-sucedido como %s\n"), cdata.username);
+    _tprintf(_T("\nLogin bem-sucedido como %s\n"), cdata.username);
 
     // Inicia thread para receber respostas
     HANDLE hReceiveThread = CreateThread(NULL, 0, recebePipe, &cdata, 0, NULL);
@@ -325,7 +319,6 @@ int _tmain(int argc, TCHAR* argv[]) {
     CloseHandle(cdata.hEvent);
     CloseHandle(hThread);
     CloseHandle(hEnviaThread);
-    _tprintf(_T("Encerrando bot...\n"));
     CloseHandle(hReceiveThread);
     CloseHandle(hPipe);
     UnmapViewOfFile(cdata.sharedMem);
