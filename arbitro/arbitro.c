@@ -123,19 +123,18 @@ BOOL initMemAndSync(ControlData* cdata)
 	_tprintf(TEXT("MAXLETRAS: %d | RITMO: %d\n"), maxLetras, ritmo);
 
 
-	//Creates or opens a named or unnamed file mapping object for a specified file.
 	//Criar ou abrir um ficheiro para mapear em memoria
 	BOOL firstProcess = FALSE;
 
-	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//SE CORRER BEM É PORQUE JÁ EXISTE, SE FOR NULL CRIA EM BAIXO
-	if (cdata->hMapFile == NULL) {//se for null cria o
+	cdata->hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHM_NAME);//se nao der erro é porque ja existe
+	if (cdata->hMapFile == NULL) {//se for null cria
 		cdata->hMapFile = CreateFileMapping(
-			INVALID_HANDLE_VALUE, //como aqui nao ha ficheiro para interligar, nao colocamos nada
-			NULL, // ATRIBUTO DE SEGURANCA DEFAULT
-			PAGE_READWRITE,//PERMISSOES DE VISTAS
+			INVALID_HANDLE_VALUE, //nao ha ficheiro a interligar
+			NULL, // seguranca
+			PAGE_READWRITE,//permissoes
 			0,//tamanho inicial
-			sizeof(SharedMem), //sizeof(SharedMsg) AQUI É O TAMANHO
-			SHM_NAME); //este nome é muito importante para saber qual o hMapFile a usar/chamar noutros processos
+			sizeof(SharedMem), 
+			SHM_NAME); 
 		firstProcess = TRUE;//se foi criada é o primeiro processo
 	}
 	if (cdata->hMapFile == NULL)
@@ -145,10 +144,9 @@ BOOL initMemAndSync(ControlData* cdata)
 	}
 
 	//Maps a view of a file mapping into the address space of a calling process
-	//isto serve para colocar a mensagem escrita em memoria partilhada, para podermos aceder noutros processos
 	cdata->sharedMem = (SharedMem*)MapViewOfFile(cdata->hMapFile,//aquilo que pretendemos mapear
-		FILE_MAP_ALL_ACCESS, //permissoes de acesso, tipo de acesso
-		0,//USAR 0 SE O FICHEIRO FOR MENOR QUE 4GB
+		FILE_MAP_ALL_ACCESS, //permissoes de acesso
+		0,//
 		0,//de onde começamos a mapear
 		sizeof(SharedMem)); //tamanho max
 
@@ -205,12 +203,12 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 	ControlData* cdata = (ControlData*)p;
 	BufferCell cell;
 	static TCHAR letras[] = _T("maepicroa");
-	srand((unsigned int)time(NULL));  // Inicializa o gerador com o tempo atual
+	srand((unsigned int)time(NULL));  // inicializa o gerador com o tempo atual
 	unsigned int posVazia = -1;
 
 	while (!cdata->shutdown) {
 		if (cdata->shutdown)
-			return 0; //flag para terminar
+			return 0; //terminar
 
 
 		if (cdata->sharedMem->nusers < 2) {
@@ -228,7 +226,7 @@ DWORD WINAPI enviaLetras(LPVOID p) {
 		do {
 			unsigned indice = rand() % 9;
 			cell.letra = letras[indice];
-		} while (cell.letra == cdata->sharedMem->buffer[cdata->sharedMem->wP].letra); // Garante que a letra é diferente da última escrita
+		} while (cell.letra == cdata->sharedMem->buffer[cdata->sharedMem->wP].letra); // garante que a letra é diferente da última escrita
 
 		// 1. Verifica se há espaço vazio ('_') no buffer
 		posVazia = -1;
@@ -320,7 +318,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 	LONG result;
 	TCHAR cmdPrincipal[256] = { 0 };
 	TCHAR cmdSec[256] = { 0 };
-	unsigned int val, n = 0,velocidade=0;
+	unsigned int val, n = 0, velocidade = 0;
 	PipeMsg msg = { 0 };
 	srand(time(NULL));
 	unsigned int tempo_reacao;
@@ -487,7 +485,6 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 					WriteFile(cdata->hPipe[0], &msg, sizeof(PipeMsg), &bytesWritten, NULL);
 				}
 
-				// Fecha o pipe
 				CloseHandle(cdata->hPipe[n]);
 
 				// remova o utilizador do array e ajuste nusers
@@ -526,7 +523,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 	BOOL fSuccess;
 	unsigned int pontos = 0;
 	unsigned int pontoslider = 0;
-	unsigned int ilider=0;
+	unsigned int ilider = 0;
 
 	const TCHAR* palavras[] = {
 	   _T("carro"),
@@ -722,7 +719,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 
 						cdata->sharedMem->pontuacao[i] += len;
 						pontos = cdata->sharedMem->pontuacao[i]; // Guarda a pontuação atualizada
-						
+
 
 						break;
 					}
@@ -737,13 +734,13 @@ DWORD WINAPI comunica(LPVOID tdata) {
 
 
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
-					if (pontoslider<cdata->sharedMem->pontuacao[i]) {
+					if (pontoslider < cdata->sharedMem->pontuacao[i]) {
 						ilider = i;
 					}
 				}
 
 				for (int i = 0; i < cdata->sharedMem->nusers; i++) {
-					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) != 0 && pontos > pontoslider && i!=ilider ) {
+					if (_tcscmp(cdata->sharedMem->users[i], receivedMsg.username) != 0 && pontos > pontoslider && i != ilider) {
 						_stprintf_s(responseMsg.buff, 256, _T("O jogador %s acertou a palavra '%s' e ganhou %d pontos e é o lider com %d pontos!\n"),
 							receivedMsg.username, receivedMsg.buff, len, pontos);
 						pontoslider = pontos;
@@ -757,7 +754,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 					}
 				}
 
-			
+
 			}
 			else {
 				WaitForSingleObject(cdata->hMutex, INFINITE);
@@ -809,7 +806,7 @@ DWORD WINAPI comunica(LPVOID tdata) {
 	}
 
 	// Continua a execução normalmente após notificar todos
-	
+
 	_tprintf(_T("Conexão com %s encerrada\n"), receivedMsg.username);
 	return 0;
 }
@@ -846,11 +843,11 @@ DWORD WINAPI keyboardThread(LPVOID p) {
 			break;
 		}
 
-		// Remove the & since cdata is already a pointer
+		
 		tratarComando(command, cdata);
 	} while (cdata->shutdown == 0);
 
-	return 0;  // Return 0 instead of NULL for DWORD
+	return 0;  
 }
 
 BOOL isUsernameInvalid(const TCHAR* username) {
@@ -1034,7 +1031,7 @@ int _tmain(int argc, TCHAR* argv[])
 							cdata.sharedMem->users[i], GetLastError());
 					}
 				}
-			
+
 
 			}
 			else {
