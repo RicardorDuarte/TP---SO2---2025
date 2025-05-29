@@ -43,7 +43,7 @@ typedef struct _ControlData {
 } ControlData;
 
 typedef struct _PipeMsg {
-	HANDLE hPipe; 
+	HANDLE hPipe;
 	TCHAR buff[256];
 	BOOL isUsernameInvalid;
 	TCHAR username[26];
@@ -133,8 +133,8 @@ BOOL initMemAndSync(ControlData* cdata)
 			NULL, // seguranca
 			PAGE_READWRITE,//permissoes
 			0,//tamanho inicial
-			sizeof(SharedMem), 
-			SHM_NAME); 
+			sizeof(SharedMem),
+			SHM_NAME);
 		firstProcess = TRUE;//se foi criada é o primeiro processo
 	}
 	if (cdata->hMapFile == NULL)
@@ -327,21 +327,7 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 
 	int args = _stscanf_s(comando, _T("%255s %255s %255s"), cmdPrincipal, 256, cmdSec, 256);
 
-	if (args > 0) {
-		_tprintf(_T("Comando completo: %s\n"), comando);
-		_tprintf(_T("Partes encontradas: %d\n"), args);
-	}
-
-	if (args >= 1) {
-		_tprintf(_T("primeiro token: %s\n"), cmdPrincipal);
-
-	}
-
-	if (args >= 2) {
-		_tprintf(_T("Segundo token: %s\n"), cmdSec);
-	}
-
-
+	
 
 	if (_tcscmp(cmdPrincipal, _T("encerrar")) == 0) {
 		WaitForSingleObject(cdata->hMutex, INFINITE);
@@ -448,7 +434,6 @@ void tratarComando(const TCHAR* comando, LPVOID lpParam) {
 			}
 		}
 		velocidade = 5 + (rand() % 26);
-		_tprintf(_T("Lançando bot com nome: %s e ritmo: %d\n"), cmdSec, velocidade);
 		LancaBotComNovaConsola(cmdSec, velocidade);
 	}
 
@@ -541,7 +526,6 @@ DWORD WINAPI comunica(LPVOID tdata) {
 		// Lê mensagem do cliente
 		fSuccess = ReadFile(hPipe, &receivedMsg, sizeof(PipeMsg), &bytesRead, NULL);
 
-		_tprintf(_T("Mensagem recebida de %s: %s\n"), receivedMsg.username, receivedMsg.buff);
 
 		if (!fSuccess || bytesRead != sizeof(PipeMsg)) {
 			DWORD err = GetLastError();
@@ -587,7 +571,6 @@ DWORD WINAPI comunica(LPVOID tdata) {
 			}
 
 			if (_tcscmp(receivedMsg.buff, _T(":jogs")) == 0) {
-				_tprintf(_T("Cliente %s solicitou a lista de jogadores\n"), receivedMsg.username);
 				WaitForSingleObject(cdata->hMutex, INFINITE);
 
 				// Prepara a resposta
@@ -610,16 +593,13 @@ DWORD WINAPI comunica(LPVOID tdata) {
 				if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
 					_tprintf(_T("Erro ao enviar lista de jogadores (%d)\n"), GetLastError());
 				}
-				else {
-					_tprintf(_T("Lista de jogadores enviada com sucesso\n"));
-				}
+
 
 				ReleaseMutex(cdata->hMutex);
 				continue;
 			}
 
 			if (_tcscmp(receivedMsg.buff, _T(":pont")) == 0) {
-				_tprintf(_T("Cliente %s solicitou a lista de pontuações\n"), receivedMsg.username);
 				WaitForSingleObject(cdata->hMutex, INFINITE);
 
 				// Prepara a resposta
@@ -663,7 +643,6 @@ DWORD WINAPI comunica(LPVOID tdata) {
 			size_t len = _tcslen(receivedMsg.buff);
 
 			if (palavraReconhecida) {
-				_tprintf(_T("Cliente %s enviou palavra: %s\nVerificar se e valida\n"), receivedMsg.username, receivedMsg.buff);
 
 				// Primeiro verifica se todas as letras existem (incluindo repetições)
 				palavraValida = TRUE;
@@ -799,9 +778,8 @@ DWORD WINAPI comunica(LPVOID tdata) {
 		BOOL fSuccess = WriteFile(cdata->hPipe[i], &responseMsg, sizeof(PipeMsg), &bytesWritten, NULL);
 
 		if (!fSuccess || bytesWritten != sizeof(PipeMsg)) {
-			//_tprintf(_T("[AVISO] Falha ao notificar %s (Erro: %d)\n"),
-			//	cdata->sharedMem->users[i], GetLastError());
-			// Continua para o próximo usuário mesmo em caso de erro
+			_tprintf(_T("[AVISO] Falha ao notificar %s (Erro: %d)\n"),
+
 		}
 	}
 
@@ -820,7 +798,6 @@ void saidaordeira(ControlData* cdata, HANDLE hTread, HANDLE mutexGlobal) {
 	ReleaseMutex(cdata->hMutex);
 
 	//fechar os pipes
-	_tprintf(_T("a tentar terminar\n"));
 	WaitForSingleObject(hTread, INFINITE);
 	for (int i = 0; i < cdata->sharedMem->nusers; i++) {
 		CloseHandle(cdata->hPipe[i]);
@@ -843,11 +820,11 @@ DWORD WINAPI keyboardThread(LPVOID p) {
 			break;
 		}
 
-		
+
 		tratarComando(command, cdata);
 	} while (cdata->shutdown == 0);
 
-	return 0;  
+	return 0;
 }
 
 BOOL isUsernameInvalid(const TCHAR* username) {
@@ -956,7 +933,6 @@ int _tmain(int argc, TCHAR* argv[])
 			cdata.nPipes++;
 			ReleaseMutex(cdata.hMutex);
 
-			_tprintf(_T("Thread de comunicação iniciada para pipe (handle: %p)\n"), hPipe);
 			WaitForSingleObject(cdata.hMutex, INFINITE);
 			if (cdata.nPipes == 0) {
 				ReleaseMutex(cdata.hMutex);
@@ -994,7 +970,6 @@ int _tmain(int argc, TCHAR* argv[])
 					break;
 				}
 			}
-			_tprintf(_T("\n%d\n"), cdata.sharedMem->nusers);
 
 			if (!usernameExists && cdata.sharedMem->nusers < NUSERS) {
 				WaitForSingleObject(cdata.hMutex, INFINITE);
@@ -1039,7 +1014,6 @@ int _tmain(int argc, TCHAR* argv[])
 				_tprintf(_T("Login recusado para: %s\n"), pidata.username);
 			}
 
-			_tprintf(_T("Há %d utilizadores registados.\n"), cdata.sharedMem->nusers);
 
 			ReleaseMutex(cdata.hMutex);
 
@@ -1060,7 +1034,6 @@ int _tmain(int argc, TCHAR* argv[])
 				continue;
 			}
 
-			_tprintf(_T("Ligação com %s estabelecida com sucesso!\n"), pidata.username);
 
 			hMSG = CreateThread(NULL, 0, comunica, &cdata, 0, NULL);
 			if (hThrTeclado == NULL) {
@@ -1102,7 +1075,6 @@ int _tmain(int argc, TCHAR* argv[])
 	// Cleanup
 	WaitForSingleObject(hThrTeclado, INFINITE);
 	saidaordeira(&cdata, hThread, hSingle_instance);
-	_tprintf(_T("Saída ordeira bem sucedida\n"));
 
 	return 0;
 }
