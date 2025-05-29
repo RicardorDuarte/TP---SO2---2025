@@ -1,4 +1,3 @@
-
 #include <windows.h>
 #include <tchar.h>
 #include <fcntl.h>
@@ -8,7 +7,7 @@
 
 
 #define SHM_NAME TEXT("SHM_PC")           // nome da memoria partilhada
-#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex   
+#define MUTEX_NAME TEXT("MUTEX")          // nome do mutex  
 #define SEM_WRITE_NAME TEXT("SEM_WRITE")  // nome do semaforo de escrita
 #define SEM_READ_NAME TEXT("SEM_READ")    // nome do semaforo de leitura
 #define EVENT_NAME TEXT("EVENT")          // nome do evento
