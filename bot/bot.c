@@ -197,7 +197,7 @@ int _tmain(int argc, TCHAR* argv[]) {
     ControlData cdata;
 	BotData botData;
     HANDLE hThread, hPipe, hEvent;
-    LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
+    LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\pipeTP");
 
 #ifdef UNICODE
     _setmode(_fileno(stdin), _O_WTEXT);
