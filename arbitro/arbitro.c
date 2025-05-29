@@ -861,7 +861,7 @@ BOOL isUsernameInvalid(const TCHAR* username) {
 
 int _tmain(int argc, TCHAR* argv[])
 {
-	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\xpto");
+	LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\pipeTP");
 	ControlData cdata = { 0 };
 	HANDLE hThread = NULL, hThrTeclado = NULL, hPipe = NULL, hMSG = NULL;
 	TCHAR command[100];
