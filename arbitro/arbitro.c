@@ -43,7 +43,7 @@ typedef struct _ControlData {
 } ControlData;
 
 typedef struct _PipeMsg {
-	HANDLE hPipe; //necessario?
+	HANDLE hPipe; 
 	TCHAR buff[256];
 	BOOL isUsernameInvalid;
 	TCHAR username[26];
