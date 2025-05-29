@@ -15,14 +15,14 @@
 #define NUSERS 10
 
 typedef struct _BufferCell {
-    TCHAR  letra; // valor que o produtor gerou
+    TCHAR  letra; 
 } BufferCell;
 
 typedef struct _SharedMem {
     unsigned int c;   //    
     unsigned int wP;  // posicao do buffer escrita     
     unsigned int rP;  // posicao do buffer leitura
-    BufferCell buffer[BUFFER_SIZE]; // buffer circular
+    BufferCell buffer[BUFFER_SIZE]; // buffer 
     char users[NUSERS][25]; // array de strings para os nomes dos jogadores
     int pontuacao[NUSERS]; // array de inteiros para as pontuações dos jogadores
     int nusers;
@@ -38,12 +38,11 @@ typedef struct _ControlData {
     unsigned int nPipes;    // maximo de pipes
     TCHAR username[26];     // username do bot
     TCHAR lastCommand[256]; // Último comando lido
-    HANDLE hSendEvent;      // evento para sinalizar que o produtor pode enviar dados
 } ControlData;
 
 typedef struct _BotData {
-	ControlData* cdata;     // ponteiro para os dados de controlo
-	unsigned int velocidade; // palavras que o bot pode enviar
+    ControlData* cdata;     // ponteiro para os dados de controlo
+    unsigned int velocidade; // palavras que o bot pode enviar
 } BotData;
 
 typedef struct _PipeMsg {
@@ -187,7 +186,7 @@ DWORD WINAPI enviaPalavras(LPVOID param) {
             _tprintf(_T("[ERRO] ao enviar palavra! Error: %d\n"), GetLastError());
             break;
         }
-        Sleep(1000*bdata->velocidade);
+        Sleep(1000 * bdata->velocidade);
 
     }
     return 0;
@@ -195,7 +194,7 @@ DWORD WINAPI enviaPalavras(LPVOID param) {
 
 int _tmain(int argc, TCHAR* argv[]) {
     ControlData cdata;
-	BotData botData;
+    BotData botData;
     HANDLE hThread, hPipe, hEvent;
     LPTSTR PIPE_NAME = _T("\\\\.\\pipe\\pipeTP");
 
@@ -213,7 +212,7 @@ int _tmain(int argc, TCHAR* argv[]) {
     botData.cdata = &cdata;
     cdata.shutdown = 0;
     _tcsncpy_s(cdata.username, 26, argv[1], _TRUNCATE);
-    botData.velocidade= _tstoi(argv[2]);
+    botData.velocidade = _tstoi(argv[2]);
     srand(GetTickCount()); // Para seleção aleatória de palavras
 
     // Conexão com o pipe
